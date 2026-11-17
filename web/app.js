@@ -481,6 +481,21 @@ function render() {
   $("#status").innerHTML = `${m.demo ? `<span class="pill">DEMO DATA</span>` : "Live Garmin data · "}${shortDate(m.start)} – ${shortDate(m.end)} · fetched ${new Date(m.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${failed ? ` · ${failed} source${failed > 1 ? "s" : ""} failed` : ""}`;
 }
 
+// ---------- password (required when deployed; optional locally) ----------
+const pw = {
+  get() { try { return sessionStorage.getItem("hi.pw") || localStorage.getItem("hi.pw") || ""; } catch { return ""; } },
+  set(v, remember) { try { (remember ? localStorage : sessionStorage).setItem("hi.pw", v); } catch { /* storage unavailable */ } },
+  clear() { try { sessionStorage.removeItem("hi.pw"); localStorage.removeItem("hi.pw"); } catch { /* storage unavailable */ } },
+};
+function showLogin(message) {
+  $("#app").hidden = true;
+  $("#login").hidden = false;
+  $("#lock").hidden = true;
+  $("#login-err").textContent = message || "";
+  $("#status").textContent = "Locked";
+  $("#pw").focus();
+}
+
 async function load(refresh = false) {
   const days = store.get("hi.days", "90");
   document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.days === days)));
@@ -488,21 +503,39 @@ async function load(refresh = false) {
   btn.disabled = true;
   $("#status").textContent = "Fetching from Garmin…";
   try {
-    const res = await fetch(`/api/data?days=${days}${refresh ? "&refresh=1" : ""}`);
-    const body = await res.json();
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    const headers = pw.get() ? { Authorization: `Bearer ${pw.get()}` } : {};
+    const res = await fetch(`/api/data?days=${days}&tz=${encodeURIComponent(tz)}${refresh ? "&refresh=1" : ""}`, { headers, cache: "no-store" });
+    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    if (res.status === 401 && body.auth) {
+      const had = !!pw.get();
+      pw.clear();
+      return showLogin(had ? "Wrong password." : "");
+    }
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
     STATE = body;
     $("#banner").hidden = true;
+    $("#login").hidden = true;
+    $("#app").hidden = false;
+    $("#lock").hidden = !pw.get();
     render();
   } catch (e) {
     $("#banner").hidden = false;
-    $("#banner").innerHTML = `<strong>Couldn't load data.</strong> ${esc(e.message)}<br><span class="unit" style="margin:0">Is <code>python3 server.py</code> running and your key in <code>.env</code>? Try <code>python3 server.py --demo</code> to preview.</span>`;
+    const local = ["localhost", "127.0.0.1"].includes(location.hostname);
+    $("#banner").innerHTML = `<strong>Couldn't load data.</strong> ${esc(e.message)}${local ? `<br><span class="unit" style="margin:0">Is <code>python3 server.py</code> running and your key in <code>.env</code>? Try <code>python3 server.py --demo</code> to preview.</span>` : ""}`;
     $("#status").textContent = "Error";
   } finally {
     btn.disabled = false;
   }
 }
 
+$("#login").addEventListener("submit", (e) => {
+  e.preventDefault();
+  pw.set($("#pw").value, $("#remember").checked);
+  $("#pw").value = "";
+  load();
+});
+$("#lock").addEventListener("click", () => { pw.clear(); STATE = null; Object.values(charts).forEach((c) => c.destroy()); showLogin(""); });
 document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => { store.set("hi.days", b.dataset.days); load(); }));
 $("#refresh").addEventListener("click", () => load(true));
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);

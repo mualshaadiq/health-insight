@@ -22,10 +22,21 @@
       <button data-days="365">1y</button>
     </div>
     <button id="refresh" class="btn" title="Fetch fresh data from Garmin">Refresh</button>
+    <button id="lock" class="btn" title="Forget the password on this device" hidden>Lock</button>
   </div>
 </header>
 
 <div id="banner" class="banner" hidden></div>
+
+<form id="login" class="card login" hidden>
+  <h2>This dashboard is private</h2>
+  <p class="sub">Enter the dashboard password to load your Garmin data.</p>
+  <label for="pw" class="sr">Password</label>
+  <input type="password" id="pw" autocomplete="current-password" placeholder="Password" required>
+  <label class="check"><input type="checkbox" id="remember" checked> Remember on this device</label>
+  <button class="btn primary" type="submit">Unlock</button>
+  <p id="login-err" class="login-err" role="alert"></p>
+</form>
 
 <main id="app">
   <section aria-labelledby="h-today">

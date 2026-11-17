@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/data.py": {
+      "maxDuration": 60,
+      "includeFiles": "{core.py,garmin_client.py,demo_data.py}"
+    }
+  },
+  "rewrites": [
+    { "source": "/", "destination": "/web/index.html" },
+    { "source": "/((?!api/|web/).+)", "destination": "/web/$1" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "no-referrer" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+.env
+.cache
+tests
+server.py
+snapshot*.json
+__pycache__

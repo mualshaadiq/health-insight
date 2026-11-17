@@ -28,6 +28,23 @@ The server also reads the key from the `GARMIN_PERSONAL_API_KEY` environment
 variable, or from `~/.config/garmin/connect-personal-api-key`, which is the
 same file Garmin's official Python client uses.
 
+## Deploy to Vercel
+
+The repo deploys as-is: `web/` is served as static files and `api/data.py`
+runs as a Python serverless function (see `vercel.json`). Set these
+environment variables on the Vercel project:
+
+| Variable | Purpose |
+|---|---|
+| `GARMIN_PERSONAL_API_KEY` | your Personal API key (mark it **Sensitive**) |
+| `DASHBOARD_PASSWORD` | required on Vercel. The API refuses to serve data without it. Use a long random string. |
+| `DEMO_MODE` | optional. Set to `1` to serve synthetic data instead. |
+
+The page asks for the password once. It's kept in the browser if you tick
+"Remember", and **Lock** forgets it. All requests are marked `noindex`, and
+data responses are `private, no-store`. The bearer token and a 15-minute
+data cache live in the function's `/tmp`.
+
 ## What you get
 
 **Today:** a readiness estimate (0–100) that blends overnight HRV and resting
@@ -85,7 +102,8 @@ python3 -m unittest discover -s tests                 # offline tests against a 
 ## Security
 
 - `.env`, `.cache/` and `snapshot*.json` are git-ignored. **Never commit your key.**
-- The server binds to `127.0.0.1` by default. Your key is sent only to Garmin's token endpoint.
+- The local server binds to `127.0.0.1` by default. Your key is sent only to Garmin's token endpoint.
+- On Vercel, data is only served with `DASHBOARD_PASSWORD`. Without it, the deployment fails closed.
 - If a key leaks (for example, pasted into a chat or a commit), delete it in
   Garmin Connect and create a new one. Deleting a key also revokes every token
   issued from it.
