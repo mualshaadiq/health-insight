@@ -2,7 +2,8 @@
 
 A private health and workout dashboard for your own Garmin data. It uses the
 [Garmin Connect Personal API](https://developer.garmin.com/gc-developer-program/personal/personal-api)
-and runs entirely on your machine. There's nothing to install beyond Python 3.10+.
+and runs on your own machine or on Vercel. There's nothing to install beyond
+Python 3.10+.
 
 
 ## Quick start
@@ -30,15 +31,28 @@ same file Garmin's official Python client uses.
 
 ## Deploy to Vercel
 
-The repo deploys as-is: `web/` is served as static files and `api/data.py`
-runs as a Python serverless function (see `vercel.json`). Set these
-environment variables on the Vercel project:
+The repo deploys as-is: `web/` is served as static files and `api/*.py` run
+as Python serverless functions (see `vercel.json`). Set these environment
+variables on the Vercel project:
 
 | Variable | Purpose |
 |---|---|
 | `GARMIN_PERSONAL_API_KEY` | your Personal API key (mark it **Sensitive**) |
 | `DASHBOARD_PASSWORD` | required on Vercel. The API refuses to serve data without it. Use a long random string. |
+| `CRON_SECRET` | required for the morning refresh. Vercel sends it to `/api/cron`, and other callers are rejected. |
+| `BLOB_READ_WRITE_TOKEN` | added automatically when you connect a **private** Vercel Blob store. Daily briefings are stored there. |
+| `APP_TIMEZONE` | optional (e.g. `Asia/Jakarta`). Normally learned from your browser on first visit. |
 | `DEMO_MODE` | optional. Set to `1` to serve synthetic data instead. |
+
+### Daily refresh
+
+A Vercel Cron job calls `/api/cron` every day at **22:00 UTC** (change
+`crons` in `vercel.json` to suit your morning). It pulls fresh Garmin data,
+recomputes everything, and saves that day's **briefing** to private Blob
+storage: readiness, today's recommended run, next-week mileage and all
+insights. Opening the dashboard also saves a briefing if none exists yet. If
+the scheduled run happened before your watch synced last night's sleep, the
+first visit after the sync regenerates it. **Refresh** always regenerates it.
 
 The page asks for the password once. It's kept in the browser if you tick
 "Remember", and **Lock** forgets it. All requests are marked `noindex`, and
@@ -47,47 +61,71 @@ data cache live in the function's `/tmp`.
 
 ## What you get
 
+### Overview
 **Today:** a readiness estimate (0–100) that blends overnight HRV and resting
 HR (each against your 28-day baseline), sleep score, Body Battery peak and
-training-load ratio. Next to it are tiles for sleep, HRV, resting HR, Body
-Battery, steps and stress.
+training-load ratio. It comes with tiles for sleep, HRV, resting HR, Body
+Battery, steps and stress, plus **today's recommended run**.
 
-**Insights:** rule-based reads of your own trends, sorted with the most
-important first:
-- sleep duration, sleep debt and night-to-night consistency; deep/REM share
-- HRV and resting HR this week vs your previous 4 weeks, and vs Garmin's balanced range
-- acute:chronic training-load ratio (spike, productive or detraining)
-- training consistency and volume change, plus the intensity split (time in Z1–2 vs Z4–5)
-- personal patterns: how your HRV responds the night after your hardest days, and whether sleep length tracks your HRV
-- steps vs goal, all-day stress, VO₂ max change
+**Health:**
+- an early strain warning when resting HR, HRV and breathing rate move the wrong way together
+- resting HR and HRV trends, the HRV balanced range and below-baseline streaks
+- breathing rate, SpO₂, VO₂ max and fitness age, weight trend
+- weekly intensity minutes vs WHO's 150–300 guideline
 
-**Sleep & recovery charts:** sleep by stage, HRV with its balanced band,
-resting HR, Body Battery high/low, stress, steps vs goal, VO₂ max and weight.
+**Wellbeing:**
+- sleep duration, sleep debt, deep/REM share
+- bedtime regularity and weekend "social jet lag"
+- stress (including workdays vs weekends) and Body Battery charge vs drain
+- daily steps and rest-day frequency
+- personal patterns: whether sleep length tracks your HRV, and whether evening workouts hurt your sleep
 
-**Workouts:** weekly volume by sport, acute vs chronic training load,
-time in HR zones, sport mix, and a table of recent activities.
+Every flag comes with a concrete **→ action**.
 
-**Data sources:** shows the status of each Garmin endpoint and its raw JSON.
-Use it when a chart looks empty.
+**Running coach:**
+- a running fitness estimate (VDOT) from your best recent hard effort, or Garmin's VO₂ max as a fallback
+- race predictions for 5K, 10K, half and full marathon
+- Daniels-style training paces (easy, marathon, threshold, interval, repetition) plus your easy heart-rate ceiling
+- **today's session:** rest, easy, long run, threshold or intervals, chosen from readiness, days since your last hard and long run, and load ratio
+- **next 7 days:** a distance range (about +10%, held back when you're tired, or a deload after three building weeks) and a day-by-day plan that adds up to it
+- running flags: mileage jumps, long-run share, easy runs done too hard, cadence, aerobic efficiency trend, running streaks
 
-Choose 30 days, 90 days, 180 days or 1 year. Responses are cached for
-15 minutes in `.cache/`. **Refresh** forces a fresh pull.
+**Training:** load ratio, consistency, intensity distribution, how hard days
+affect your next-night HRV; weekly volume by sport, load chart, HR-zone time,
+sport mix, and a table of recent activities (click a row to open that day).
+
+### Daily page (`#/day/YYYY-MM-DD`)
+For any date in the last ~11 months:
+- that morning's **saved briefing**, showing what the dashboard recommended
+- the day's metrics against your 28-day baseline, with "what stood out" notes
+- a **sleep-stage chart**, heart rate through the day (with your easy ceiling), Body Battery through the day, and 5-minute overnight HRV readings
+- that day's workouts
+
+**Data sources** (overview) shows each Garmin endpoint's status, and you can
+load its raw JSON. Choose 30 days, 90 days, 180 days or 1 year. Responses are
+cached for 15 minutes.
 
 ## How it works
 
 ```
-browser ──► server.py (127.0.0.1 only) ──► personal.connectapi.garmin.com
+browser ──► server.py or api/*.py ──► personal.connectapi.garmin.com
               │  POST /personalapitoken-service/... (Authorization: ApiKey <key>)  → JWT, ≤24 h
               │  GET  sleep / hrv / stress / steps / body battery / activities … (Bearer JWT)
-              └─ .cache/bearer-token.json (0600), .cache/data-*.json
+              ├─ analysis.py  → daily metrics, readiness, insights, running coach
+              └─ storage.py   → daily briefings (private Vercel Blob, or .cache/store locally)
 ```
 
 - `garmin_client.py` handles the key → bearer-token exchange (cached, renewed
   when less than 1 h of life remains, retried once on a 401). It also splits
   long ranges into 28-day chunks. The endpoint paths match Garmin's
   [official client](https://github.com/garmin/connect-personal-api-python).
-- `server.py` is a stdlib HTTP server. Each data set is fetched on its own,
-  so one failing endpoint doesn't block the rest.
+- `core.py` holds the request logic shared by `server.py` (local) and the
+  Vercel functions. Each data set is fetched on its own, so one failing
+  endpoint doesn't block the rest. At least 120 days are always fetched, so
+  baselines and running history work in the 30-day view too.
+- `analysis.py` is all the maths: tolerant field lookup, baselines,
+  readiness, insights, and the running coach (Daniels/Gilbert VO₂ equations
+  for VDOT, paces and race predictions).
 - `web/` holds the dashboard (vanilla JS plus a bundled copy of Chart.js 4.4.1,
   MIT licensed). Field lookup tolerates different response shapes.
 
@@ -96,7 +134,7 @@ Other options:
 ```bash
 python3 server.py --export snapshot.json --days 180   # dump raw data to a file
 python3 server.py --port 9000
-python3 -m unittest discover -s tests                 # offline tests against a fake Garmin
+python3 -m unittest discover -s tests                 # offline tests (fake Garmin + analysis)
 ```
 
 ## Security

@@ -1,11 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/data.py": {
+    "api/*.py": {
       "maxDuration": 60,
-      "includeFiles": "{core.py,garmin_client.py,demo_data.py}"
+      "includeFiles": "{core.py,analysis.py,storage.py,garmin_client.py,demo_data.py,api/_handler.py}"
     }
   },
+  "crons": [
+    { "path": "/api/cron", "schedule": "0 22 * * *" }
+  ],
   "rewrites": [
     { "source": "/", "destination": "/web/index.html" },
     { "source": "/((?!api/|web/).+)", "destination": "/web/$1" }

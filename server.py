@@ -29,7 +29,6 @@ WEB = ROOT / "web"
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "HealthInsight/1.0"
-    demo = False
 
     def log_message(self, fmt, *args):
         sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"), fmt % args))
@@ -47,9 +46,9 @@ class Handler(BaseHTTPRequestHandler):
         import core
 
         url = urlsplit(self.path)
-        if url.path == "/api/data":
-            status, payload = core.handle_data(parse_qs(url.query), self.headers.get("Authorization"), self.demo, core.shared_client)
-            return self._json(status, payload)
+        routes = {"/api/data": core.handle_data, "/api/day": core.handle_day}
+        if url.path in routes:
+            return self._json(*routes[url.path](parse_qs(url.query), self.headers.get("Authorization")))
         rel = "index.html" if url.path in ("", "/") else url.path.lstrip("/")
         f = (WEB / rel).resolve()
         if WEB not in f.parents or not f.is_file():
@@ -81,14 +80,14 @@ def main() -> None:
         except GarminError as e:
             sys.exit(f"error: {e}\n(or run with --demo to preview the dashboard)")
 
+    core.set_local_demo(args.demo)
     if args.export:
-        data = core.fetch_all(None if args.demo else core.shared_client(), args.days, args.demo)
+        data = core.fetch_raw(max(args.days, core.MIN_FETCH_DAYS), core.today_in(None), args.demo)
         Path(args.export).write_text(json.dumps(data, indent=1))
         bad = [k for k, v in data["sets"].items() if not v["ok"]]
         print(f"wrote {args.export}" + (f" (failed: {', '.join(bad)})" if bad else ""))
         return
 
-    Handler.demo = args.demo
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Health Insight running at http://{args.host}:{args.port}  ({'DEMO data' if args.demo else 'live Garmin data'})")
     try:

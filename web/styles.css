@@ -154,3 +154,70 @@ tbody tr:hover { background: var(--wash); }
 @media (max-width: 420px) {
   .tile .value { font-size: 22px; }
 }
+
+/* ---------- navigation ---------- */
+.tabs { display: inline-flex; gap: 2px; background: var(--wash); border-radius: 8px; padding: 2px; }
+.tabs a { color: var(--ink-2); text-decoration: none; font-size: 13px; padding: 4px 10px; border-radius: 6px; }
+.tabs a[aria-current="page"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
+.sec-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.sec-head h2 { margin: 0; }
+.muted { color: var(--ink-2); }
+.mono { font-variant-numeric: tabular-nums; }
+
+/* ---------- insights ---------- */
+.cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.col-h { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 8px; }
+.ins-list { display: grid; gap: 10px; }
+.ins-list.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 12px; }
+.insight .action { color: var(--ink); font-size: 13px; margin-top: 6px; font-weight: 500; }
+
+/* ---------- today's session ---------- */
+.session { margin-top: 12px; }
+.session-head { display: flex; gap: 10px; align-items: center; }
+.session-head .label { color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+.session-head h3 { margin: 0; font-size: 17px; }
+.session p { margin: 8px 0 0; }
+.session .why, .brief .why { color: var(--muted); font-size: 12.5px; }
+
+/* ---------- running ---------- */
+.run-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.card-h { font-size: 14px; margin: 0 0 10px; }
+.kv { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: 14px; border-bottom: 1px solid var(--grid); }
+.kv:last-child { border-bottom: 0; }
+.kv span { color: var(--ink-2); }
+.kv.sep { margin-top: 10px; border-top: 1px solid var(--axis); }
+.foot { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+.paces { width: 100%; font-size: 13.5px; }
+.paces th { color: var(--ink); font-size: 13.5px; font-weight: 600; padding: 6px 8px 6px 0; }
+.paces td { padding: 6px 8px; white-space: nowrap; }
+.paces td.muted { white-space: normal; font-size: 12.5px; }
+.plan { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; font-size: 13.5px; }
+.plan li { display: grid; grid-template-columns: 40px 1fr; gap: 8px; padding: 5px 8px; border-radius: 6px; background: var(--wash); }
+.plan li span { color: var(--muted); font-weight: 600; }
+.plan li.rest { background: transparent; color: var(--muted); }
+.plan li.quality { box-shadow: inset 3px 0 0 var(--s2); }
+.plan li.long { box-shadow: inset 3px 0 0 var(--s1); }
+.plan li.easy { box-shadow: inset 3px 0 0 var(--s3); }
+#acts tbody tr { cursor: pointer; }
+
+/* ---------- daily page ---------- */
+.day-nav { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; }
+.day-nav h2 { margin: 0 0 0 auto; font-size: 17px; }
+.day-nav input[type="date"] { font: inherit; font-size: 14px; padding: 5px 8px; border: 1px solid var(--axis); border-radius: 8px; background: var(--page); color: var(--ink); min-height: 32px; }
+.brief-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: center; }
+.brief .label { color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.brief-score { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.brief-score strong { font-size: 22px; }
+.brief-session { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
+.brief-session p { margin: 6px 0 0; }
+.brief-flags { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--grid); display: grid; gap: 6px; font-size: 13.5px; }
+.brief-flags > div { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+.tiles.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.up { color: var(--good-ink); font-weight: 600; }
+.down { color: var(--critical); font-weight: 600; }
+
+@media (max-width: 900px) {
+  .cols, .ins-list.two, .run-grid { grid-template-columns: 1fr; }
+  .tiles.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .day-nav h2 { margin: 4px 0 0; width: 100%; }
+}

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 SPORTS = [  # typeKey, name, weight, (min, max) minutes, speed m/s, hr
     ("running", "Run", 4, (25, 75), 2.9, 152),
@@ -18,6 +18,35 @@ SPORTS = [  # typeKey, name, weight, (min, max) minutes, speed m/s, hr
     ("walking", "Walk", 2, (30, 70), 1.4, 102),
     ("yoga", "Yoga", 1, (30, 50), 0, 92),
 ]
+
+
+def _local_ms(d: date, hour: int, minute: int) -> int:
+    """Garmin 'Local' timestamps: wall-clock time encoded as if it were UTC."""
+    t = datetime(d.year, d.month, d.day, tzinfo=timezone.utc) + timedelta(hours=hour, minutes=minute)
+    return int(t.timestamp() * 1000)
+
+
+def generate_day(d: date, tz) -> dict:
+    """Synthetic per-day detail: intraday heart rate, sleep stages and overnight HRV readings."""
+    rnd = random.Random(d.toordinal())
+    start_local = datetime(d.year, d.month, d.day, tzinfo=tz) - timedelta(hours=1, minutes=30)
+    t, segs, cycle = start_local, [], [(1, 20), (0, 35), (1, 25), (2, 15), (1, 20), (0, 25), (2, 25), (3, 3), (1, 30), (2, 30), (1, 25), (0, 10), (2, 35), (3, 5), (1, 20)]
+    for stage, mins in cycle:
+        e = t + timedelta(minutes=mins + rnd.randint(-5, 5))
+        segs.append({"startGMT": t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0"), "endGMT": e.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0"), "activityLevel": stage})
+        t = e
+    day0 = datetime(d.year, d.month, d.day, tzinfo=tz)
+    hr = []
+    for i in range(0, 24 * 60, 2):
+        h = i / 60
+        base = 50 if h < 6.5 else 68 + 8 * math.sin(h / 3)
+        if 17.5 <= h <= 18.5:
+            base = 145 + rnd.uniform(-8, 10)
+        hr.append([int((day0 + timedelta(minutes=i)).timestamp() * 1000), round(base + rnd.uniform(-3, 3))])
+    readings = [{"hrvValue": round(55 + rnd.uniform(-12, 12)), "readingTimeLocal": (start_local + timedelta(minutes=5 * k)).strftime("%Y-%m-%dT%H:%M:%S.0")} for k in range(0, 96)]
+    return {"sleep": {"dailySleepDTO": {"calendarDate": d.isoformat()}, "sleepLevels": segs},
+            "heartRate": {"calendarDate": d.isoformat(), "heartRateValues": hr},
+            "hrv": {"hrvSummary": {"calendarDate": d.isoformat()}, "hrvReadings": readings}}
 
 
 def generate(start: date, end: date, seed: int = 7) -> dict:
@@ -63,13 +92,14 @@ def generate(start: date, end: date, seed: int = 7) -> dict:
                 "anaerobicTrainingEffect": round(rnd.uniform(0, 2.5), 1),
                 "activityTrainingLoad": round(load, 1),
                 "elevationGain": round(rnd.uniform(5, 220)) if typ in ("running", "cycling", "walking") else None,
+                "averageRunningCadenceInStepsPerMinute": round(rnd.uniform(158, 172)) if typ == "running" else None,
                 **{f"hrTimeInZone_{k + 1}": zones[k] for k in range(5)},
             })
         fatigue = fatigue * 0.8 + load_today / 60
         # recovery
         trend = math.sin(i / 11) * 2
-        rhr = round(52 + fatigue * 1.6 - trend * .5 + rnd.uniform(-1.5, 1.5))
-        hrv_night = round(max(28, 61 - fatigue * 4 + trend * 2 + rnd.uniform(-6, 6)))
+        rhr = round(52 + fatigue * 0.7 - trend * .5 + rnd.uniform(-1.5, 1.5))
+        hrv_night = round(max(30, 62 - fatigue * 1.8 + trend * 2 + rnd.uniform(-6, 6)))
         sl = max(4.6, min(9.2, rnd.gauss(7.2 if wk in (4, 5) else 6.9, .7)))
         deep, rem, awake = sl * rnd.uniform(.14, .22), sl * rnd.uniform(.18, .26), rnd.uniform(.1, .6)
         light = sl - deep - rem
@@ -88,14 +118,23 @@ def generate(start: date, end: date, seed: int = 7) -> dict:
             "remSleepSeconds": round(rem * 3600), "awakeSleepSeconds": round(awake * 3600),
             "sleepScores": {"overall": {"value": score}},
             "avgOvernightHrv": hrv_night,
+            "sleepStartTimestampLocal": _local_ms(d - timedelta(days=1), 22 + (1 if wk in (5, 6) else 0), rnd.randint(0, 59) + (40 if wk in (5, 6) else 0)),
+            "sleepEndTimestampLocal": _local_ms(d, 6, rnd.randint(0, 59)),
             "averageRespirationValue": round(rnd.uniform(13, 16), 1),
         })
         hrv.append({"calendarDate": ds, "lastNightAvg": hrv_night, "weeklyAvg": None,
                     "baseline": {"balancedLow": 49, "balancedUpper": 66}})
         steps.append({"calendarDate": ds, "totalSteps": stp, "stepGoal": 10000, "totalDistance": round(stp * .78)})
         stress.append({"calendarDate": ds, "values": {"overallStressLevel": st}})
+        base_ms = int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp() * 1000)
+        def level(h, hi=bb_high, lo=bb_low):  # charge overnight, drain through the day
+            h = h % 24
+            if h < 6.5:
+                return lo + 10 + (hi - lo - 10) * h / 6.5
+            return hi - (hi - lo) * ((h - 6.5) / 17.5) ** 0.8
+        # span ±12 h so the curve covers the local day in any timezone
         bb.append({"date": ds, "charged": round(bb_high - 15), "drained": round(bb_high - bb_low),
-                   "bodyBatteryValuesArray": [[0, bb_low + 10], [1, bb_high], [2, bb_low]]})
+                   "bodyBatteryValuesArray": [[base_ms + int(h * 3600000), round(level(h))] for h in [x / 2 for x in range(-24, 72)]]})
         daily.append({"calendarDate": ds, "heartRate": {"restingHeartRate": rhr},
                       "calories": {"activeKilocalories": round(stp * .04 + load_today * 4)},
                       "intensityMinutes": {"moderateIntensityMinutes": rnd.randint(5, 40),

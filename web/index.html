@@ -12,16 +12,20 @@
 <header class="top">
   <div class="brand">
     <h1>Health Insight</h1>
+    <nav class="tabs" aria-label="Pages">
+      <a href="#/" data-route="overview">Overview</a>
+      <a href="#/day" data-route="day">Daily</a>
+    </nav>
     <span id="status" class="status">Loading…</span>
   </div>
   <div class="controls">
-    <div class="seg" role="group" aria-label="Date range">
+    <div class="seg" role="group" aria-label="Date range" id="range">
       <button data-days="30">30d</button>
       <button data-days="90">90d</button>
       <button data-days="180">180d</button>
       <button data-days="365">1y</button>
     </div>
-    <button id="refresh" class="btn" title="Fetch fresh data from Garmin">Refresh</button>
+    <button id="refresh" class="btn" title="Fetch fresh data from Garmin and regenerate today's briefing">Refresh</button>
     <button id="lock" class="btn" title="Forget the password on this device" hidden>Lock</button>
   </div>
 </header>
@@ -38,23 +42,51 @@
   <p id="login-err" class="login-err" role="alert"></p>
 </form>
 
-<main id="app">
+<!-- ================================================================ OVERVIEW -->
+<main id="app" class="page" data-page="overview">
   <section aria-labelledby="h-today">
-    <h2 id="h-today">Today</h2>
+    <div class="sec-head"><h2 id="h-today">Today</h2><span class="unit" id="brief-meta"></span></div>
     <div class="today">
       <div class="hero card" id="readiness"></div>
       <div class="tiles" id="tiles"></div>
     </div>
+    <div class="card session" id="session"></div>
   </section>
 
-  <section aria-labelledby="h-insights">
-    <h2 id="h-insights">Insights</h2>
-    <p class="sub">Rule-based reads of your own trends, not medical advice. Baselines are your last 28 days.</p>
-    <div class="insights" id="insights"></div>
+  <section aria-labelledby="h-health">
+    <div class="sec-head"><h2 id="h-health">Health &amp; wellbeing</h2></div>
+    <p class="sub">Rule-based reads of your own trends against your 28-day baseline. Not medical advice.</p>
+    <div class="cols">
+      <div><h3 class="col-h">Health</h3><div class="ins-list" id="ins-health"></div></div>
+      <div><h3 class="col-h">Wellbeing</h3><div class="ins-list" id="ins-wellbeing"></div></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-running" id="running-sec">
+    <div class="sec-head"><h2 id="h-running">Running coach</h2></div>
+    <div class="run-grid">
+      <div class="card" id="run-fitness"></div>
+      <div class="card" id="run-paces"></div>
+      <div class="card" id="run-week"></div>
+    </div>
+    <figure class="card"><figcaption>Weekly running distance <span class="unit">km · outlined bar = suggested range for next week</span></figcaption><div class="chart"><canvas id="c-runweekly"></canvas></div></figure>
+    <div class="ins-list two" id="ins-running"></div>
+  </section>
+
+  <section aria-labelledby="h-training">
+    <div class="sec-head"><h2 id="h-training">Training</h2></div>
+    <div class="ins-list two" id="ins-training"></div>
+    <div class="tiles row" id="wtiles"></div>
+    <div class="grid">
+      <figure class="card wide"><figcaption>Weekly training volume <span class="unit">hours by sport</span></figcaption><div class="chart"><canvas id="c-volume"></canvas></div></figure>
+      <figure class="card wide"><figcaption>Training load <span class="unit">7-day acute vs 28-day chronic (daily avg)</span></figcaption><div class="chart"><canvas id="c-load"></canvas></div></figure>
+      <figure class="card"><figcaption>Time in heart-rate zones <span class="unit">hours</span></figcaption><div class="chart short"><canvas id="c-zones"></canvas></div></figure>
+      <figure class="card"><figcaption>Sport mix <span class="unit">hours</span></figcaption><div class="chart short"><canvas id="c-sports"></canvas></div></figure>
+    </div>
   </section>
 
   <section aria-labelledby="h-recovery">
-    <h2 id="h-recovery">Sleep &amp; recovery</h2>
+    <div class="sec-head"><h2 id="h-recovery">Sleep &amp; recovery</h2></div>
     <div class="grid">
       <figure class="card wide"><figcaption>Sleep by stage <span class="unit">hours / night</span></figcaption><div class="chart"><canvas id="c-sleep"></canvas></div></figure>
       <figure class="card"><figcaption>HRV overnight <span class="unit">ms · band = balanced range</span></figcaption><div class="chart"><canvas id="c-hrv"></canvas></div></figure>
@@ -67,27 +99,61 @@
     </div>
   </section>
 
-  <section aria-labelledby="h-workouts">
-    <h2 id="h-workouts">Workouts</h2>
-    <div class="tiles row" id="wtiles"></div>
-    <div class="grid">
-      <figure class="card wide"><figcaption>Weekly training volume <span class="unit">hours by sport</span></figcaption><div class="chart"><canvas id="c-volume"></canvas></div></figure>
-      <figure class="card wide"><figcaption>Training load <span class="unit">7-day acute vs 28-day chronic (daily avg)</span></figcaption><div class="chart"><canvas id="c-load"></canvas></div></figure>
-      <figure class="card"><figcaption>Time in heart-rate zones <span class="unit">hours</span></figcaption><div class="chart short"><canvas id="c-zones"></canvas></div></figure>
-      <figure class="card"><figcaption>Sport mix <span class="unit">hours</span></figcaption><div class="chart short"><canvas id="c-sports"></canvas></div></figure>
-    </div>
+  <section aria-labelledby="h-acts">
+    <div class="sec-head"><h2 id="h-acts">Recent activities</h2></div>
     <figure class="card table-card">
-      <figcaption>Recent activities</figcaption>
       <div class="table-wrap"><table id="acts"><thead><tr>
-        <th>Date</th><th>Sport</th><th>Name</th><th class="n">Duration</th><th class="n">Distance</th><th class="n">Avg HR</th><th class="n">Load</th><th class="n">Aerobic TE</th>
+        <th>Date</th><th>Sport</th><th>Name</th><th class="n">Duration</th><th class="n">Distance</th><th class="n">Pace</th><th class="n">Avg HR</th><th class="n">Load</th><th class="n">Aerobic TE</th>
       </tr></thead><tbody></tbody></table></div>
     </figure>
   </section>
 
   <section aria-labelledby="h-sources">
-    <h2 id="h-sources">Data sources</h2>
-    <p class="sub">Each Garmin endpoint is fetched separately; one failing doesn't block the rest. Expand to inspect the raw JSON.</p>
+    <div class="sec-head"><h2 id="h-sources">Data sources</h2></div>
+    <p class="sub">Each Garmin endpoint is fetched separately; one failing doesn't block the rest. Expand one to load its raw JSON.</p>
     <div id="sources" class="sources"></div>
+  </section>
+</main>
+
+<!-- ================================================================ DAILY -->
+<main id="day" class="page" data-page="day" hidden>
+  <div class="day-nav card">
+    <button class="btn" id="d-prev" aria-label="Previous day">‹ Prev</button>
+    <input type="date" id="d-date" aria-label="Date">
+    <button class="btn" id="d-next" aria-label="Next day">Next ›</button>
+    <button class="btn" id="d-today">Today</button>
+    <h2 id="d-title"></h2>
+  </div>
+
+  <section>
+    <div class="card brief" id="d-brief"></div>
+  </section>
+
+  <section>
+    <div class="tiles four" id="d-tiles"></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>What stood out</h2></div>
+    <div class="ins-list two" id="d-notes"></div>
+  </section>
+
+  <section>
+    <div class="grid">
+      <figure class="card wide" id="df-sleep"><figcaption>Sleep stages <span class="unit" id="d-sleep-sum"></span></figcaption><div class="chart short"><canvas id="dc-sleep"></canvas></div></figure>
+      <figure class="card wide" id="df-hr"><figcaption>Heart rate <span class="unit">bpm through the day</span></figcaption><div class="chart"><canvas id="dc-hr"></canvas></div></figure>
+      <figure class="card" id="df-bb"><figcaption>Body Battery <span class="unit">through the day</span></figcaption><div class="chart short"><canvas id="dc-bb"></canvas></div></figure>
+      <figure class="card" id="df-hrv"><figcaption>Overnight HRV <span class="unit">ms, 5-min readings</span></figcaption><div class="chart short"><canvas id="dc-hrv"></canvas></div></figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Workouts</h2></div>
+    <figure class="card table-card">
+      <div class="table-wrap"><table id="d-acts"><thead><tr>
+        <th>Time</th><th>Sport</th><th>Name</th><th class="n">Duration</th><th class="n">Distance</th><th class="n">Pace</th><th class="n">Avg HR</th><th class="n">Load</th><th class="n">Aerobic TE</th>
+      </tr></thead><tbody></tbody></table></div>
+    </figure>
   </section>
 </main>
 
