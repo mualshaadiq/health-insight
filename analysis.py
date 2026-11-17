@@ -11,6 +11,8 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
+import run_detail
+
 # ----------------------------------------------------------------- helpers
 
 def _num(v):
@@ -660,10 +662,93 @@ def predict_time(vdot, dist_m):
     return (lo + hi) / 2
 
 
-def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
+BEST_LABELS = {"1k": "1K", "3k": "3K", "5k": "5K", "10k": "10K", "21.1k": "Half marathon"}
+BEST_EFFORT_HR = {"3k": 0.86, "5k": 0.86, "10k": 0.84, "21.1k": 0.82}
+
+
+def _ok(d):
+    return d if d and not d.get("error") else None
+
+
+def run_kind(a, d, hrp, median_km=None):
+    """easy / long / tempo / intervals / race, from the run's own samples when available."""
+    name = (a.get("name") or "").lower()
+    km = (a.get("dist") or 0) / 1000
+    if any(w in name for w in ("race", "parkrun", "marathon", " 10k", " 5k")) and d and d.get("steady"):
+        return "race"
+    if d and d.get("intervals"):
+        return "intervals"
+    if km >= max(12, 1.4 * (median_km or 0)):
+        return "long"
+    if d and d.get("steady") and hrp.get("thresholdHR"):
+        above = run_detail.time_above(d, hrp["thresholdHR"] - 3)
+        if above is not None and above >= 0.35:
+            return "tempo"
+    if not d and _num(a.get("te")) and a["te"] >= 3.5:
+        return "tempo"
+    return "easy"
+
+
+def describe_run(a, d, hrp, fitness=None, kind=None, pbs=None):
+    """A run's headline numbers plus short, plain-language notes. Includes chart series when present."""
+    d = _ok(d)
+    out = {"id": a["id"], "date": a["date"], "name": a["name"], "kind": kind or run_kind(a, d, hrp),
+           "distKm": round((a.get("dist") or 0) / 1000, 2), "dur": a["dur"], "avgHR": a.get("avgHR"), "hasDetail": bool(d)}
+    if a.get("dist"):
+        out["paceSec"] = round(a["dur"] / (a["dist"] / 1000))
+    notes = []
+    if d:
+        out.update({k: d.get(k) for k in ("gapSec", "paceSec", "elevGain", "cadence", "decoupling", "halves", "fadePct", "intervals", "best", "splits", "series", "paceCv", "movingSec")})
+        if d.get("gapSec") and d.get("paceSec") and d["paceSec"] - d["gapSec"] >= 8:
+            notes.append(("info", f"Hilly: {d['elevGain']} m of climbing. Hill-adjusted pace {pace_str(d['gapSec'])} vs {pace_str(d['paceSec'])} actual."))
+        iv = d.get("intervals")
+        if iv:
+            txt = f"{iv['reps']} × {dur_str(iv['repSec'] / 60)} reps at {pace_str(iv['paceSec'])} average, consistency ±{iv['cvPct']:.1f}%"
+            txt += f", last rep {signed(iv['fadePct'], 1, '%')} vs first." if abs(iv["fadePct"]) >= 1 else ", even from first to last."
+            lvl = "good" if iv["cvPct"] <= 4 and iv["fadePct"] <= 3 else "warning"
+            if fitness and fitness.get("intervalSec"):
+                diff = (iv["paceSec"] / fitness["intervalSec"] - 1) * 100
+                if diff <= -4:
+                    txt += f" That's {abs(diff):.0f}% faster than your interval pace: either fitness is higher than estimated or the reps were run too hard."
+                elif diff >= 5:
+                    txt += f" That's {diff:.0f}% slower than your interval pace; fine if they were hill or longer reps."
+            if iv.get("hrWork") and iv.get("hrRest"):
+                txt += f" HR {iv['hrWork']} working, {iv['hrRest']} recovering."
+            notes.append((lvl, txt))
+        h = d.get("halves")
+        if h and out["kind"] in ("long", "race", "tempo", "easy") and out["distKm"] >= 5:
+            if h["pct"] <= -1.5:
+                notes.append(("good", f"Negative split: second half {abs(h['pct']):.1f}% faster (hill-adjusted)."))
+            elif h["pct"] >= 5:
+                notes.append(("warning", f"Slowed {h['pct']:.1f}% in the second half (hill-adjusted). Start a little easier next time."))
+            else:
+                notes.append(("good", f"Even pacing: halves within {abs(h['pct']):.1f}%."))
+        if d.get("decoupling") is not None:
+            dc = d["decoupling"]
+            notes.append(("good" if dc < 5 else "warning" if dc < 10 else "serious",
+                          f"Heart-rate drift {dc:.1f}%" + (": solid aerobic endurance at this pace." if dc < 5 else ": HR rose noticeably for the same pace. Heat, fuelling or aerobic base." if dc < 10 else ": large drift, so this pace is beyond your current aerobic endurance for this duration.")))
+        if out["kind"] == "easy" and hrp.get("easyCeiling"):
+            above = run_detail.time_above(d, hrp["easyCeiling"] + 1)
+            if above is not None:
+                out["aboveEasyPct"] = round(above * 100)
+                if above > 0.25:
+                    notes.append(("warning", f"{above * 100:.0f}% of this easy run was above your easy ceiling ({hrp['easyCeiling']:.0f} bpm)."))
+        for k, be in (d.get("best") or {}).items():
+            if pbs and k in pbs and pbs[k]["id"] == a["id"] and k != "1k":
+                notes.append(("good", f"Fastest {BEST_LABELS[k]} of the last 90 days: {dur_str(be['sec'] / 60)}."))
+    out["notes"] = [{"level": lv, "text": t} for lv, t in notes]
+    return out
+
+
+def running_report(days, acts, load, hrp, readiness_res, flags, today: date, details=None):
     runs = [a for a in acts if a["family"] == "run" and a["dur"] > 0]
     if not runs:
         return None
+    details = details or {}
+    det = {r["id"]: _ok(details.get(str(r["id"]))) for r in runs}
+    km_list = sorted((r["dist"] or 0) / 1000 for r in runs[:30])
+    median_km = km_list[len(km_list) // 2] if km_list else 0
+    kinds = {r["id"]: run_kind(r, det[r["id"]], hrp, median_km) for r in runs}
     rec = {}
     # weekly volume (Mon–Sun), last 12 weeks
     def wk(d):
@@ -700,11 +785,34 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
         if v and 20 <= v <= 85:
             effort = (_num(r["avgHR"]) and hard_hr and r["avgHR"] >= hard_hr) or (_num(r["te"]) and r["te"] >= 3.5)
             cands.append((v, effort, r))
+    # best efforts inside runs (from the activity files) beat whole-run averages
+    max_hr = hrp.get("maxHR") or 0
+    for r in runs:
+        d = det[r["id"]]
+        if r["date"] < cutoff or not d:
+            continue
+        for k, be in (d.get("best") or {}).items():
+            if k not in BEST_EFFORT_HR:
+                continue
+            dist_m = run_detail.BEST_DISTANCES[k]
+            v = vdot_from(dist_m, be["sec"] / 60)
+            if not v or not 20 <= v <= 85:
+                continue
+            effort = (max_hr and be.get("hr") and be["hr"] >= max_hr * BEST_EFFORT_HR[k]) or kinds[r["id"]] == "race"
+            cands.append((v, effort, {**r, "dist": dist_m, "dur": be["sec"], "_segment": BEST_LABELS[k]}))
+        iv = d.get("intervals")
+        if iv and iv["reps"] >= 4 and 150 <= iv["repSec"] <= 360 and iv["cvPct"] <= 4 and iv["fadePct"] <= 3:
+            # even 2.5-6 min reps are run at roughly VO2max speed; treat that as a conservative calibration
+            v = _vo2_at(1000 / iv["paceSec"] * 60)
+            if 20 <= v <= 85:
+                cands.append((v, True, {**r, "_interval": iv}))
     hard = [c for c in cands if c[1]]
     garmin_vo2 = next((r["vo2"] for r in runs if _num(r.get("vo2"))), None) or (latest(days, "vo2") or (0, None))[1]
     if hard:
         vdot, _, best = max(hard, key=lambda c: c[0])
-        src = f"your {best['dist'] / 1000:.1f} km effort on {best['date']}"
+        src = (f"your fastest {best['_segment']} ({dur_str(best['dur'] / 60)}) inside the {best['date']} run" if best.get("_segment")
+               else f"your {best['_interval']['reps']} × {dur_str(best['_interval']['repSec'] / 60)} interval session on {best['date']}" if best.get("_interval")
+               else f"your {best['dist'] / 1000:.1f} km effort on {best['date']}")
     elif garmin_vo2:
         vdot, src = garmin_vo2 * 0.95, "Garmin VO₂ max (no recent hard run to calibrate)"
     elif cands:
@@ -717,7 +825,7 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
         def pace_at(frac):
             return 60000 / velocity_at(vdot * frac)  # sec per km
         m_time = predict_time(vdot, 42195)
-        rec["fitness"] = {"vdot": vdot, "source": src}
+        rec["fitness"] = {"vdot": vdot, "source": src, "intervalSec": round(pace_at(0.975)), "thresholdSec": round(pace_at(0.88)), "easySec": round(pace_at(0.70))}
         rec["paces"] = [
             {"zone": "Easy / long", "pace": f"{pace_str(pace_at(0.74))[:-3]}–{pace_str(pace_at(0.62))}", "hr": f"< {hrp['easyCeiling']:.0f} bpm" if hrp.get("easyCeiling") else "conversational", "use": "Most of your running"},
             {"zone": "Marathon", "pace": pace_str(m_time * 60 / 42.195), "hr": "", "use": "Long-run finishes, steady runs"},
@@ -729,6 +837,21 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
         easy_lo = pace_at(0.74)
     else:
         easy_lo = None
+
+    # best efforts (90 days) and a breakdown of recent runs
+    pbs = {}
+    for r in runs:
+        d = det[r["id"]]
+        if r["date"] < cutoff or not d:
+            continue
+        for k, be in (d.get("best") or {}).items():
+            if k not in pbs or be["sec"] < pbs[k]["sec"]:
+                pbs[k] = {"sec": be["sec"], "date": r["date"], "id": r["id"], "hr": be.get("hr")}
+    rec["bests"] = [{"label": BEST_LABELS[k], "time": dur_str(v["sec"] / 60), "pace": pace_str(v["sec"] / run_detail.BEST_DISTANCES[k] * 1000), "date": v["date"], "hr": v["hr"]}
+                    for k, v in sorted(pbs.items(), key=lambda kv: run_detail.BEST_DISTANCES[kv[0]])]
+    rec["runs"] = [{k: v for k, v in describe_run(r, det[r["id"]], hrp, rec.get("fitness"), kinds[r["id"]], pbs).items() if k not in ("series", "splits", "best")}
+                   for r in runs[:12]]
+    rec["detailCoverage"] = {"withDetail": sum(1 for r in runs if r["date"] >= cutoff and det[r["id"]]), "runs": sum(1 for r in runs if r["date"] >= cutoff)}
 
     # next-week volume guidance
     building = len(done) >= 3 and done[-1]["km"] > done[-2]["km"] > done[-3]["km"] > 0
@@ -747,7 +870,10 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
     # today's session
     last_run = runs[0]
     p75 = sorted(a["load"] for a in acts)[int(len(acts) * 0.75)] if len(acts) >= 4 else None
-    since_hard = next(((today - date.fromisoformat(a["date"])).days for a in acts if is_hard(a, p75)), 99)
+    def hard(a):
+        k = kinds.get(a["id"])
+        return k in ("intervals", "tempo", "race") if k and det.get(a["id"]) else is_hard(a, p75)
+    since_hard = next(((today - date.fromisoformat(a["date"])).days for a in acts if hard(a)), 99)
     long_cut = max(8.0, base_km * 0.25)
     since_long = next(((today - date.fromisoformat(r["date"])).days for r in runs if (r["dist"] or 0) / 1000 >= long_cut), 99)
     ran_today = any(r["date"] == today.isoformat() for r in runs)
@@ -765,16 +891,45 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
         mins = 30 if score < 55 else 40
         sess = {"type": "easy", "title": f"Easy run, {mins} min", "detail": f"Keep it conversational: {easy_pace}{hr_cap}. Skip it if legs feel heavy.", "level": "warning"}
     elif since_long >= 6 and (weekend or since_long >= 9) and score >= 60:
-        km = round(min(max(base_km * 0.3, 8), longest + 1.5 if longest else 12), 0)
-        sess = {"type": "long", "title": f"Long run, ~{km:.0f} km", "detail": f"Steady and easy ({easy_pace}{hr_cap}). Fuel if over 75 min; finish the last 10 min at marathon effort only if you feel strong.", "level": "good"}
+        last_long = next((r for r in runs if kinds[r["id"]] == "long" and det[r["id"]]), None)
+        lld = det[last_long["id"]] if last_long else None
+        grow = 1.5
+        note = ""
+        if lld and lld.get("decoupling") is not None:
+            if lld["decoupling"] >= 7:
+                grow = 0
+                note = f" Your last long run drifted {lld['decoupling']:.0f}% in heart rate, so hold the distance, start slower and fuel every 30–40 min."
+            elif lld["decoupling"] < 5:
+                note = f" Last long run held steady (drift {lld['decoupling']:.0f}%), so a small step up is fine."
+        if lld and lld.get("halves") and lld["halves"]["pct"] >= 5:
+            note += " Last time you faded in the second half: run the first half deliberately slower."
+        km = round(min(max(base_km * 0.3, 8), longest + grow if longest else 12), 0)
+        sess = {"type": "long", "title": f"Long run, ~{km:.0f} km", "detail": f"Steady and easy ({easy_pace}{hr_cap}). Fuel if over 75 min; finish the last 10 min at marathon effort only if you feel strong.{note}", "level": "good"}
     elif score >= 70 and since_hard >= 2 and runs_per_wk >= 3:
         t_pace = next((p["pace"] for p in rec.get("paces", []) if p["zone"] == "Threshold"), "comfortably hard")
         i_pace = next((p["pace"] for p in rec.get("paces", []) if p["zone"] == "Interval"), "hard")
-        last_q = next((a for a in runs if is_hard(a, p75)), None)
-        if last_q and (_num(last_q.get("anTe")) and last_q["anTe"] >= 2.5):
+        last_q = next((a for a in runs if hard(a)), None)
+        last_kind = kinds.get(last_q["id"]) if last_q else None
+        if last_q and det.get(last_q["id"]):
+            do_threshold = last_kind == "intervals"
+        else:
+            do_threshold = bool(last_q and _num(last_q.get("anTe")) and last_q["anTe"] >= 2.5)
+        if do_threshold:
             sess = {"type": "threshold", "title": "Threshold session", "detail": f"15 min easy, then 3 × 8 min at {t_pace} with 2 min jog, 10 min easy cool-down.", "level": "good"}
         else:
-            sess = {"type": "intervals", "title": "VO₂ max intervals", "detail": f"15 min easy, then 5 × 3 min at {i_pace} with 2 min jog, 10 min easy cool-down.", "level": "good"}
+            reps, rep_txt = 5, "3 min"
+            prev = next((det[r["id"]]["intervals"] for r in runs if det[r["id"]] and det[r["id"]].get("intervals")), None)
+            note = ""
+            if prev:
+                reps = prev["reps"]
+                rep_txt = dur_str(prev["repSec"] / 60) if prev["repSec"] < 600 else "3 min"
+                strong = prev["fadePct"] <= 3 and prev["cvPct"] <= 4
+                if strong:
+                    reps = min(8, reps + 1)
+                    note = f" Last time you held {prev['reps']} reps evenly (±{prev['cvPct']:.1f}%), so add one."
+                else:
+                    note = f" Last time the reps faded {prev['fadePct']:.0f}%: repeat {prev['reps']} and start the first one a touch slower."
+            sess = {"type": "intervals", "title": "VO₂ max intervals", "detail": f"15 min easy, then {reps} × {rep_txt} at {i_pace} with 2 min jog, 10 min easy cool-down.{note}", "level": "good"}
     else:
         sess = {"type": "easy", "title": "Easy aerobic run, 40–50 min", "detail": f"{easy_pace}{hr_cap}, then 4–6 × 20 s relaxed strides.", "level": "good"}
     sess["why"] = [x for x in [
@@ -820,7 +975,16 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
             ins.append(_ins("serious", "Mileage jump", f"Last week's {done[-1]['km']:.0f} km was {signed(jump, 0, '%')} on the week before. Big jumps are the most common route to running injuries.", "running", "Don't add more this week; settle back toward your recent average."))
     if done and done[-1]["km"] > 0 and done[-1]["longKm"] / done[-1]["km"] > 0.4 and done[-1]["runs"] >= 2:
         ins.append(_ins("warning", "Long run share", f"Your long run was {done[-1]['longKm'] / done[-1]['km'] * 100:.0f}% of last week's distance.", "running", "Keep the long run near 25–35% of weekly volume by adding short easy runs."))
-    if hrp.get("easyCeiling"):
+    recent28 = [r for r in runs if r["date"] >= (today - timedelta(days=28)).isoformat()]
+    easy_det = [det[r["id"]] for r in recent28 if kinds[r["id"]] == "easy" and det[r["id"]]]
+    if hrp.get("easyCeiling") and len(easy_det) >= 3:
+        shares = [x for x in (run_detail.time_above(d, hrp["easyCeiling"] + 1) for d in easy_det) if x is not None]
+        if shares:
+            avg = mean(shares)
+            ins.append(_ins("warning" if avg > 0.25 else "good", "Easy-run discipline",
+                            f"On your last {len(shares)} easy runs, {avg * 100:.0f}% of the time was above your easy ceiling ({hrp['easyCeiling']:.0f} bpm), measured second by second.",
+                            "running", "Slow easy days down until most of the run sits under the ceiling; walk steep hills." if avg > 0.25 else None))
+    elif hrp.get("easyCeiling"):
         recent_runs = [r for r in runs if r["date"] >= (today - timedelta(days=28)).isoformat() and _num(r["avgHR"])]
         easyish = [r for r in recent_runs if not is_hard(r, p75)]
         if len(easyish) >= 4:
@@ -834,14 +998,21 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
         c = mean(cads)
         ins.append(_ins("info" if c < 160 else "good", "Cadence", f"Average cadence {c:.0f} steps/min over recent runs.", "running",
                         "Try a 5% higher step rate on easy runs (a metronome helps); it often reduces overstriding." if c < 160 else None))
-    ef = [((r["dist"] / r["dur"] * 60) / r["avgHR"], r["date"]) for r in runs if r["dist"] and r["dur"] > 600 and _num(r["avgHR"]) and not is_hard(r, p75)]
+    ef = []
+    for r in runs:
+        if kinds[r["id"]] not in ("easy", "long") or not _num(r["avgHR"]) or r["dur"] <= 600 or not r["dist"]:
+            continue
+        d = det[r["id"]]
+        speed = 1000 / d["gapSec"] if d and d.get("gapSec") else r["dist"] / r["dur"]  # hill-adjusted when we can
+        hr_ = d["avgHR"] if d and d.get("avgHR") else r["avgHR"]
+        ef.append((speed * 60 / hr_, r["date"]))
     if len(ef) >= 8:
         ef.sort(key=lambda x: x[1])
         half = len(ef) // 2
         a, b = mean(x[0] for x in ef[:half]), mean(x[0] for x in ef[half:])
         pct = (b / a - 1) * 100
         ins.append(_ins("good" if pct >= 1 else "info" if pct > -2 else "warning", "Aerobic efficiency",
-                        f"Speed per heartbeat on easy runs changed {signed(pct, 1, '%')} from the first to the second half of this period{' — your aerobic engine is improving.' if pct >= 1 else '.'}", "running"))
+                        f"Speed per heartbeat on easy runs changed {signed(pct, 1, '%')} from the first to the second half of this period{': your aerobic engine is improving.' if pct >= 1 else '.'}", "running"))
     consec = 0
     rdays = {r["date"] for r in runs}
     d = today - timedelta(days=1)
@@ -850,6 +1021,36 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date):
         d -= timedelta(days=1)
     if consec >= 5:
         ins.append(_ins("warning", "Running streak", f"{consec} running days in a row.", "running", "Insert a rest or cross-training day to let tendons and bones adapt."))
+    # heart-rate drift on steady runs of 45 min+
+    drifts = [(r, det[r["id"]]["decoupling"]) for r in runs[:20] if det[r["id"]] and det[r["id"]].get("decoupling") is not None and det[r["id"]]["movingSec"] >= 2700][:5]
+    if drifts:
+        avg = mean(x for _, x in drifts)
+        ins.append(_ins("good" if avg < 5 else "warning", "Aerobic endurance",
+                        f"Across your last {len(drifts)} steady runs of 45 min or more, heart rate drifted {avg:.1f}% on average for the same (hill-adjusted) pace." +
+                        (" Under 5% means your aerobic base comfortably supports these runs." if avg < 5 else " Above 5% suggests the aerobic base, fuelling or heat is limiting you on longer runs."),
+                        "running", None if avg < 5 else "Keep long runs genuinely easy, take carbs on runs over 75 min, and add easy volume gradually."))
+    # interval execution
+    last_iv = next(((r, det[r["id"]]["intervals"]) for r in runs if det[r["id"]] and det[r["id"]].get("intervals")), None)
+    if last_iv:
+        r, iv = last_iv
+        target = (rec.get("fitness") or {}).get("intervalSec")
+        txt = f"{r['date']}: {iv['reps']} × {dur_str(iv['repSec'] / 60)} at {pace_str(iv['paceSec'])} (±{iv['cvPct']:.1f}% between reps, last rep {signed(iv['fadePct'], 1, '%')} vs first)."
+        good = iv["cvPct"] <= 4 and iv["fadePct"] <= 3
+        if target:
+            diff = (iv["paceSec"] / target - 1) * 100
+            txt += f" Target interval pace is {pace_str(target)} ({signed(diff, 0, '%')})."
+            if diff <= -4:
+                good = False
+        ins.append(_ins("good" if good else "warning", "Last interval session", txt, "running",
+                        None if good else "Aim for even reps at target pace; the last rep should feel as controlled as the first."))
+    # pacing on long runs
+    longs = [det[r["id"]] for r in recent28 if kinds[r["id"]] == "long" and det[r["id"]] and det[r["id"]].get("halves")]
+    if longs:
+        fades = [d["halves"]["pct"] for d in longs]
+        bad = sum(1 for x in fades if x >= 5)
+        ins.append(_ins("warning" if bad else "good", "Long-run pacing",
+                        f"{len(longs)} long run(s) in the last 4 weeks; second half {signed(mean(fades), 1, '%')} vs first on average (hill-adjusted).",
+                        "running", "Start long runs 10–15 s/km slower than feels natural and fuel early." if bad else None))
     rec["insights"] = ins
     rec["summary"] = {"runs28": sum(1 for r in runs if r["date"] >= (today - timedelta(days=28)).isoformat()),
                       "km28": round(sum((r["dist"] or 0) for r in runs if r["date"] >= (today - timedelta(days=28)).isoformat()) / 1000, 1),
@@ -900,7 +1101,7 @@ def day_report(days, acts, load, target: str):
 
 # ----------------------------------------------------------------- entry point
 
-def analyse(payload: dict) -> dict:
+def analyse(payload: dict, details: dict | None = None) -> dict:
     meta = payload["meta"]
     sets = payload["sets"]
     start, end = date.fromisoformat(meta["fetchStart"]), date.fromisoformat(meta["end"])
@@ -924,7 +1125,7 @@ def analyse(payload: dict) -> dict:
             "wellbeing": sort(wellbeing_insights(days, acts, load)),
             "training": sort(training_insights(days, acts, load)),
         },
-        "running": running_report(days, acts, load, hrp, rd, flags, end),
+        "running": running_report(days, acts, load, hrp, rd, flags, end, details),
     }
 
 

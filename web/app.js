@@ -17,6 +17,9 @@ const addDays = (s, n) => { const d = parseDay(s); d.setDate(d.getDate() + n); r
 const signed = (v, d = 0, unit = "") => (isNum(v) ? `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(d)}${unit}` : "–");
 const hhmm = (m) => { const x = ((Math.round(m) % 1440) + 1440) % 1440; return `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`; };
 const pace = (a) => (a.family === "run" && a.dist > 0 ? (() => { const s = Math.round(a.dur / (a.dist / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}/km`; })() : "–");
+const paceFmt = (sec) => (isNum(sec) && sec > 0 ? `${Math.floor(Math.round(sec) / 60)}:${String(Math.round(sec) % 60).padStart(2, "0")}` : "–");
+const durFmt = (sec) => { if (!isNum(sec)) return "–"; const s = Math.round(sec), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}:${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${m}:${String(s % 60).padStart(2, "0")}`; };
+const KIND = { easy: "Easy", long: "Long", tempo: "Tempo", intervals: "Intervals", race: "Race" };
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } })();
 const store = {
@@ -149,8 +152,22 @@ function renderRunning(an) {
     <div class="kv"><span>Running fitness (VDOT)</span><strong>${f.vdot}</strong></div>
     ${r.predictions.map((p) => `<div class="kv"><span>${p.race}</span><strong class="mono">${p.time}</strong></div>`).join("")}
     <p class="foot">Estimated from ${esc(f.source)}. Predictions assume race-specific training.</p>` : `<p class="muted">Log a run of 3 km or more to estimate your fitness.</p>`}
+    ${r.bests?.length ? `<h3 class="card-h sub-h">Fastest in the last 90 days</h3>${r.bests.map((b) => `<div class="kv"><span>${b.label} <span class="unit">${shortDate(b.date)}</span></span><strong class="mono">${b.time} <span class="unit">${b.pace}</span></strong></div>`).join("")}` : ""}
     <div class="kv sep"><span>Last 28 days</span><strong>${r.summary.runs28} runs · ${r.summary.km28} km</strong></div>
     <div class="kv"><span>Longest run</span><strong>${r.summary.longest28} km</strong></div>`;
+  const cov = r.detailCoverage, pend = STATE?.meta?.runDetails;
+  $("#run-coverage").textContent = cov ? `Detailed analysis for ${cov.withDetail} of ${cov.runs} runs in the last 90 days${pend?.pending ? ` · ${pend.pending} more queued (picked up on your next visits and each morning)` : ""}${pend?.failed ? ` · ${pend.failed} file(s) couldn't be read` : ""}` : "";
+  const noteRank = { serious: 0, warning: 1, good: 2, info: 3 };
+  $("#runs-table tbody").innerHTML = (r.runs || []).map((x) => {
+    const top = [...(x.notes || [])].sort((a, b) => noteRank[a.level] - noteRank[b.level])[0];
+    return `<tr data-date="${x.date}">
+      <td>${shortDate(x.date)}</td><td><span class="kind ${x.kind}">${KIND[x.kind] || x.kind}</span></td>
+      <td class="n">${x.distKm.toFixed(1)} km</td><td class="n">${paceFmt(x.paceSec)}</td>
+      <td class="n">${x.gapSec && x.paceSec && Math.abs(x.paceSec - x.gapSec) >= 5 ? paceFmt(x.gapSec) : "–"}</td>
+      <td class="n">${isNum(x.avgHR) ? Math.round(x.avgHR) : "–"}</td>
+      <td class="n">${isNum(x.decoupling) ? x.decoupling.toFixed(1) + "%" : "–"}</td>
+      <td class="note-cell">${top ? `<span class="ico ${top.level} sm">${ICON[top.level]}</span>${esc(top.text)}` : x.hasDetail ? "" : `<span class="muted">Summary only</span>`}</td></tr>`;
+  }).join("") || `<tr><td colspan="8">No recent runs.</td></tr>`;
   $("#run-paces").innerHTML = `<h3 class="card-h">Training paces</h3>${r.paces ? `<table class="paces"><tbody>${r.paces.map((p) => `<tr><th>${p.zone}</th><td class="mono">${p.pace}</td><td class="muted">${esc(p.hr || p.use)}</td></tr>`).join("")}</tbody></table>
     <p class="foot">Easy runs should feel conversational. Pace targets assume flat ground and mild weather; go by effort on hills and hot days.</p>` : `<p class="muted">Not enough running data yet.</p>`}`;
   const nw = r.nextWeek;
@@ -336,6 +353,49 @@ function renderDay(rep) {
     draw("dc-hrv", { type: "line", data: { datasets: [line("HRV", pts, css("--s1"), { borderWidth: 1.5 })] }, options: baseOpts({ plugins: { tooltip: { callbacks: { title: (i) => hhmm(i[0].parsed.x), label: (i) => ` ${i.parsed.y} ms` } } }, scales: { x: timeScale(pts[0].x, pts[pts.length - 1].x) } }) });
   }
   $("#d-acts tbody").innerHTML = rep.activities.map((a) => actRow(a, true)).join("") || `<tr><td colspan="9">No workouts recorded.</td></tr>`;
+  renderDayRuns(rep.runs || []);
+}
+
+const hasHills = (x) => { const a = (x.series || []).map((p) => p[3]).filter(isNum); return a.length > 1 && Math.max(...a) - Math.min(...a) >= 5; };
+function renderDayRuns(runs) {
+  $("#d-runs-sec").hidden = !runs.length;
+  Object.keys(charts).filter((k) => k.startsWith("rc-")).forEach((k) => { charts[k].destroy(); delete charts[k]; });
+  $("#d-runs").innerHTML = runs.map((x, i) => `
+    <div class="card run-card">
+      <div class="run-head">
+        <div><span class="kind ${x.kind}">${KIND[x.kind] || x.kind}</span><h3>${esc(x.name)}</h3></div>
+        <div class="run-stats">
+          <div><span>Distance</span><strong>${x.distKm.toFixed(2)} km</strong></div>
+          <div><span>Time</span><strong>${durFmt(x.movingSec || x.dur)}</strong></div>
+          <div><span>Pace</span><strong>${paceFmt(x.paceSec)}/km</strong></div>
+          ${x.gapSec ? `<div><span>Hill-adjusted</span><strong>${paceFmt(x.gapSec)}/km</strong></div>` : ""}
+          <div><span>Avg HR</span><strong>${isNum(x.avgHR) ? Math.round(x.avgHR) : "–"}</strong></div>
+          ${isNum(x.elevGain) ? `<div><span>Climb</span><strong>${x.elevGain} m</strong></div>` : ""}
+          ${isNum(x.cadence) ? `<div><span>Cadence</span><strong>${x.cadence} spm</strong></div>` : ""}
+        </div>
+      </div>
+      ${x.hasDetail ? "" : `<p class="muted">The activity file for this run couldn't be analysed yet, so only the summary is shown.</p>`}
+      ${(x.notes || []).length ? `<div class="run-notes">${x.notes.map((n) => `<div><span class="ico ${n.level} sm">${ICON[n.level]}</span>${esc(n.text)}</div>`).join("")}</div>` : ""}
+      ${x.best && Object.keys(x.best).length ? `<div class="chips">${Object.entries(x.best).map(([k, b]) => `<span class="chip"><b>${({ "1k": "1K", "3k": "3K", "5k": "5K", "10k": "10K", "21.1k": "Half" })[k]}</b> ${durFmt(b.sec)}${b.hr ? ` · ${b.hr} bpm` : ""}</span>`).join("")}</div>` : ""}
+      ${x.series?.length ? `<div class="run-charts">
+        <figure><figcaption>Pace <span class="unit">min/km, faster is higher</span></figcaption><div class="chart mini"><canvas id="rc-pace-${i}"></canvas></div></figure>
+        <figure><figcaption>Heart rate <span class="unit">bpm</span></figcaption><div class="chart mini"><canvas id="rc-hr-${i}"></canvas></div></figure>
+        ${hasHills(x) ? `<figure><figcaption>Elevation <span class="unit">m</span></figcaption><div class="chart mini"><canvas id="rc-alt-${i}"></canvas></div></figure>` : ""}
+      </div>` : ""}
+      ${x.splits?.length ? `<details class="splits"><summary>Splits (${x.splits.length})</summary><div class="table-wrap"><table><thead><tr><th>Km</th><th class="n">Pace</th><th class="n">Hill-adj.</th><th class="n">Avg HR</th><th class="n">Elev.</th></tr></thead><tbody>
+        ${x.splits.map((sp) => `<tr><td>${sp.partial ? sp.km.toFixed(2) : sp.km}</td><td class="n">${paceFmt(sp.pace ?? sp.sec)}</td><td class="n">${paceFmt(sp.gapSec)}</td><td class="n">${sp.hr ?? "–"}</td><td class="n">${isNum(sp.elev) ? signed(sp.elev, 0, " m") : "–"}</td></tr>`).join("")}
+      </tbody></table></div></details>` : ""}
+    </div>`).join("");
+  runs.forEach((x, i) => {
+    if (!x.series?.length) return;
+    const km = x.series.map((p) => p[0]);
+    const xScale = { type: "linear", min: 0, max: km[km.length - 1], grid: { display: false }, border: { color: css("--axis") }, ticks: { color: css("--muted"), maxTicksLimit: 6, callback: (v) => `${+v.toFixed(1)} km`, font: { size: 11 } } };
+    const mk = (id, label, idx, color, extraY = {}, fmt = (v) => v) => draw(id, { type: "line", data: { datasets: [line(label, x.series.map((p) => ({ x: p[0], y: p[idx] })), color, { borderWidth: 1.5, tension: 0.2 })] },
+      options: baseOpts({ interaction: { mode: "nearest", intersect: false, axis: "x" }, plugins: { tooltip: { callbacks: { title: (it) => `${it[0].parsed.x.toFixed(2)} km`, label: (it) => ` ${fmt(it.parsed.y)}` } } }, scales: { x: xScale, y: extraY } }) });
+    mk(`rc-pace-${i}`, "Pace", 1, css("--s1"), { reverse: true, ticks: { color: css("--muted"), maxTicksLimit: 4, callback: (v) => paceFmt(v), font: { size: 11 } } }, (v) => `${paceFmt(v)}/km`);
+    mk(`rc-hr-${i}`, "Heart rate", 2, css("--s8"), {}, (v) => `${v} bpm`);
+    if (hasHills(x)) mk(`rc-alt-${i}`, "Elevation", 3, css("--muted"), {}, (v) => `${v} m`);
+  });
 }
 
 // ================================================================ routing & loading
@@ -421,4 +481,5 @@ $("#acts").addEventListener("click", (e) => {
   const a = STATE.analysis.activities.filter((x) => x.date >= STATE.meta.start)[i];
   if (a) goDay(a.date);
 });
+$("#runs-table").addEventListener("click", (e) => { const tr = e.target.closest("tbody tr[data-date]"); if (tr) goDay(tr.dataset.date); });
 load();

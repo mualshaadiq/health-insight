@@ -221,3 +221,31 @@ tbody tr:hover { background: var(--wash); }
   .tiles.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .day-nav h2 { margin: 4px 0 0; width: 100%; }
 }
+
+/* ---------- run analysis ---------- */
+.sub-h { margin-top: 14px; font-size: 13px; color: var(--ink-2); }
+.kind { display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; background: var(--wash); color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--border); }
+.kind.intervals, .kind.tempo, .kind.race { color: var(--ink); box-shadow: inset 0 0 0 1px var(--s2); }
+.kind.long { color: var(--ink); box-shadow: inset 0 0 0 1px var(--s1); }
+#run-recent { margin-bottom: 12px; }
+#runs-table tbody tr { cursor: pointer; }
+#runs-table td.note-cell { white-space: normal; min-width: 260px; font-size: 13px; color: var(--ink-2); }
+.ico.sm { width: 16px; height: 16px; font-size: 10px; display: inline-grid; margin-right: 6px; vertical-align: -3px; }
+.run-card { margin-bottom: 12px; }
+.run-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.run-head h3 { margin: 4px 0 0; font-size: 17px; }
+.run-stats { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.run-stats div { display: grid; }
+.run-stats span { color: var(--muted); font-size: 12px; }
+.run-stats strong { font-variant-numeric: tabular-nums; }
+.run-notes { display: grid; gap: 6px; margin-top: 12px; font-size: 13.5px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.chip { font-size: 12.5px; padding: 3px 9px; border-radius: 999px; background: var(--wash); font-variant-numeric: tabular-nums; }
+.run-charts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.run-charts figure { margin: 0; min-width: 0; }
+.run-charts figcaption { font-size: 13px; }
+.chart.mini { height: 150px; }
+.splits { margin-top: 12px; }
+.splits summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+.splits table { margin-top: 6px; }
+@media (max-width: 900px) { .run-charts { grid-template-columns: 1fr; } }

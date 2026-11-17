@@ -13,6 +13,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import analysis
+import fit
+import run_detail
 import storage
 from garmin_client import DATASETS, GarminClient, GarminError, resolve_api_key
 
@@ -137,6 +139,82 @@ def _sources(raw: dict) -> dict:
     return out
 
 
+# ------------------------------------------------------------------ per-run detail (FIT files)
+
+RUN_DETAIL_DAYS = 120
+_details_mem: dict | None = None
+_details_loaded = 0.0
+
+
+def load_details() -> dict:
+    """Saved per-run results; re-read every 10 min so a warm instance sees the morning job's work."""
+    global _details_mem, _details_loaded
+    if _details_mem is None or time.time() - _details_loaded > 600:
+        try:
+            fresh = storage.get_json("run-details.json") or {}
+        except Exception:  # noqa: BLE001
+            fresh = {}
+        _details_mem = {**(_details_mem or {}), **fresh}
+        _details_loaded = time.time()
+    return _details_mem
+
+
+def _fetch_detail(act: dict, demo: bool) -> dict:
+    try:
+        if demo:
+            from demo_data import demo_fit
+            blob = demo_fit(act)
+        else:
+            blob = shared_client().get_bytes(f"/download-service/files/activity/{int(act['id'])}")
+        det = run_detail.analyse_fit(fit.decode(fit.unzip_fit(blob)), act["id"])
+        return det or {"v": run_detail.VERSION, "id": act["id"], "error": "no usable samples", "at": time.time()}
+    except Exception as e:  # noqa: BLE001 - remember the failure so we don't retry on every visit
+        return {"v": run_detail.VERSION, "id": act["id"], "error": f"{type(e).__name__}: {e}"[:300], "at": time.time()}
+
+
+def ensure_details(acts: list[dict], end: date, budget_s: float, max_new: int, only_ids=None) -> tuple[dict, int]:
+    """Download + analyse activity files for recent runs not seen yet. Returns (details, still_pending)."""
+    demo = _demo() or _LOCAL_DEMO
+    details = load_details()
+    cutoff = (end - timedelta(days=RUN_DETAIL_DAYS)).isoformat()
+
+    def needs(a):
+        d = details.get(str(a["id"]))
+        if d is None or d.get("v") != run_detail.VERSION:
+            return True
+        return bool(d.get("error")) and time.time() - d.get("at", 0) > 86400  # retry failures daily
+
+    runs = [a for a in acts if a["family"] == "run" and a.get("id") is not None and a["date"] >= cutoff]
+    if only_ids is not None:
+        runs = [a for a in runs if a["id"] in only_ids]
+    todo = [a for a in runs if needs(a)]
+    batch = todo[:max_new]
+    started = time.time()
+    changed = False
+    if batch:
+        pool = ThreadPoolExecutor(max_workers=6)
+        futs = [pool.submit(_fetch_detail, a, demo) for a in batch]
+        for fu in futs:
+            remaining = budget_s - (time.time() - started)
+            try:
+                det = fu.result(timeout=max(0.1, remaining))
+            except Exception:  # noqa: BLE001 - out of time; picked up on the next visit
+                continue
+            details[str(det["id"])] = det
+            changed = True
+        pool.shutdown(wait=False, cancel_futures=True)
+    if changed:
+        keep = {str(a["id"]) for a in acts if a["family"] == "run"}
+        for k in [k for k in details if k not in keep]:
+            details.pop(k)  # forget runs that fell out of the window
+        try:
+            storage.put_json("run-details.json", details)
+        except Exception:  # noqa: BLE001
+            pass
+    pending = sum(1 for a in runs if needs(a))
+    return details, pending
+
+
 # ------------------------------------------------------------------ briefings
 
 def _remember_tz(tz: str | None) -> None:
@@ -185,12 +263,15 @@ def handle_data(query: dict, authorization: str | None) -> tuple[int, dict]:
     if (name := _q(query, "raw")):
         s = raw["sets"].get(name)
         return (200, s) if s else (404, {"error": "unknown data set"})
-    an = analysis.analyse(raw)
+    acts = analysis.build_activities(raw["sets"])
+    details, pending = ensure_details(acts, date.fromisoformat(raw["meta"]["end"]), budget_s=20, max_new=15)
+    an = analysis.analyse(raw, details)
     end = raw["meta"]["end"]
     _remember_tz(tz)
     brief, berr = sync_briefing(an, end, "refresh" if refresh else "visit", force=refresh)
     view_start = (date.fromisoformat(end) - timedelta(days=view - 1)).isoformat()
-    meta = {**raw["meta"], "start": view_start, "days": view, "storage": storage.backend(), "storageError": berr}
+    meta = {**raw["meta"], "start": view_start, "days": view, "storage": storage.backend(), "storageError": berr,
+            "runDetails": {"analysed": sum(1 for d in details.values() if not d.get("error")), "failed": sum(1 for d in details.values() if d.get("error")), "pending": pending}}
     return 200, {"meta": meta, "analysis": an, "briefing": brief, "sources": _sources(raw)}
 
 
@@ -259,7 +340,10 @@ def handle_day(query: dict, authorization: str | None) -> tuple[int, dict]:
         raw = get_raw(view, tz, False)
     except GarminError as e:
         return 502, {"error": str(e)}
-    an = analysis.analyse(raw)
+    acts = analysis.build_activities(raw["sets"])
+    day_ids = {a["id"] for a in acts if a["date"] == target}
+    details, _ = ensure_details(acts, today, budget_s=25, max_new=6, only_ids=day_ids)
+    an = analysis.analyse(raw, details)
     rep = analysis.day_report(an["days"], an["activities"], an["load"], target)
     if rep is None:
         return 404, {"error": "No data for that date."}
@@ -310,6 +394,7 @@ def handle_day(query: dict, authorization: str | None) -> tuple[int, dict]:
     except Exception:  # noqa: BLE001
         rep["briefing"] = None
     rep["hrProfile"] = an["hrProfile"]
+    rep["runs"] = [analysis.describe_run(a, details.get(str(a["id"])), an["hrProfile"], (an.get("running") or {}).get("fitness")) for a in rep["activities"] if a["family"] == "run"]
     rep["range"] = {"min": (today - timedelta(days=330)).isoformat(), "max": today.isoformat()}
     return 200, rep
 
@@ -326,8 +411,10 @@ def handle_cron(authorization: str | None) -> tuple[int, dict]:
         raw = get_raw(MIN_FETCH_DAYS, tz, True)
     except GarminError as e:
         return 502, {"error": str(e)}
-    an = analysis.analyse(raw)
+    acts = analysis.build_activities(raw["sets"])
+    details, pending = ensure_details(acts, date.fromisoformat(raw["meta"]["end"]), budget_s=35, max_new=40)
+    an = analysis.analyse(raw, details)
     brief, err = sync_briefing(an, raw["meta"]["end"], "scheduled", force=True)
     if err:
         return 500, {"error": err}
-    return 200, {"ok": True, "date": brief["date"], "tz": tz, "readiness": (brief.get("readiness") or {}).get("score")}
+    return 200, {"ok": True, "date": brief["date"], "tz": tz, "readiness": (brief.get("readiness") or {}).get("score"), "runDetailsPending": pending}

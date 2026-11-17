@@ -116,6 +116,21 @@ class GarminClient:
         except urllib.error.URLError as e:
             raise GarminError(f"Network error reaching Garmin: {e.reason}") from None
 
+    def get_bytes(self, path: str, accept: str = "application/zip, application/octet-stream") -> bytes:
+        """GET a binary resource (e.g. the original activity file as a ZIP)."""
+        for attempt in (0, 1):
+            req = urllib.request.Request(
+                self.base_url + path,
+                headers={"Authorization": f"Bearer {self.token(force=attempt == 1)}", "Accept": accept},
+            )
+            try:
+                return self._send(req)
+            except GarminError as e:
+                if e.status == 401 and attempt == 0:
+                    continue
+                raise
+        return b""
+
     def get(self, path: str, params: dict | None = None):
         qs = ("?" + urllib.parse.urlencode(params, doseq=True)) if params else ""
         for attempt in (0, 1):

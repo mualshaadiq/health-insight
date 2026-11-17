@@ -26,6 +26,54 @@ def _local_ms(d: date, hour: int, minute: int) -> int:
     return int(t.timestamp() * 1000)
 
 
+def demo_fit(act: dict) -> bytes:
+    """A synthetic FIT file for a demo run: easy, long, tempo or intervals, with hills and HR drift."""
+    import fit
+    rnd = random.Random(int(act["id"]))
+    start = datetime.fromisoformat(f"{act['date']}T{(act.get('hour') or 7):02d}:00:00").replace(tzinfo=timezone.utc).timestamp()
+    total = act["dur"]
+    base_v = (act["dist"] or total * 2.8) / total
+    kind = rnd.choices(["easy", "intervals", "tempo"], [6, 2, 2])[0] if total < 4200 else "long"
+    hilly = rnd.random() < 0.4
+    recs, laps = [], []
+    dist, t = 0.0, 0
+    lap_start, lap_dist, lap_hr = 0, 0.0, []
+    segs = []  # (seconds, speed factor, intensity)
+    if kind == "intervals":
+        segs.append((600, 0.85, 2))
+        for _ in range(rnd.randint(4, 6)):
+            segs += [(rnd.choice([180, 240]), 1.25, 0), (120, 0.6, 1)]
+        segs.append((max(300, total - sum(x[0] for x in segs) - 300), 0.85, 3))
+    elif kind == "tempo":
+        segs = [(600, 0.85, 2), (1200, 1.12, 0), (max(300, total - 1800), 0.85, 3)]
+    else:
+        segs = [(total, 1.0, 0)]
+    hr = 100.0
+    drift = 0.06 if kind == "long" else 0.02
+    for sec, factor, intensity in segs:
+        lap_start, lap_dist, lap_hr = t, 0.0, []
+        for _ in range(int(sec)):
+            frac = t / total
+            grade = 0.04 * math.sin(dist / 400) if hilly else 0.0
+            v = base_v * factor * (1 - grade * 2.5) * (1 + rnd.uniform(-0.03, 0.03))
+            target = 95 + 92 * (factor - 0.6) + 120 * grade + 100 * drift * frac
+            hr += (target - hr) * 0.05
+            dist += v
+            lap_dist += v
+            lap_hr.append(hr)
+            recs.append({"t": start + t, "dist": dist, "speed": v, "hr": round(hr), "cad": round(82 + 6 * factor), "alt": 50 + (30 * (1 - math.cos(dist / 400)) if hilly else 0)})
+            t += 1
+        laps.append({"start": start + lap_start, "end": start + t, "sec": t - lap_start, "dist": lap_dist, "hr": round(sum(lap_hr) / len(lap_hr)), "maxhr": round(max(lap_hr)), "intensity": intensity})
+    if kind in ("easy", "long"):  # auto 1 km laps instead of one big lap
+        laps = []
+        k, ls, ld = 1, 0, 0.0
+        for i, r in enumerate(recs):
+            if r["dist"] >= k * 1000 or i == len(recs) - 1:
+                laps.append({"start": start + ls, "end": start + i + 1, "sec": i + 1 - ls, "dist": r["dist"] - ld, "hr": r["hr"], "maxhr": r["hr"], "intensity": 0})
+                k, ls, ld = k + 1, i + 1, r["dist"]
+    return fit.encode(recs, laps, {"start": start, "end": start + t, "sec": t, "dist": dist})
+
+
 def generate_day(d: date, tz) -> dict:
     """Synthetic per-day detail: intraday heart rate, sleep stages and overnight HRV readings."""
     rnd = random.Random(d.toordinal())

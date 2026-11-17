@@ -90,6 +90,27 @@ Every flag comes with a concrete **→ action**.
 - **next 7 days:** a distance range (about +10%, held back when you're tired, or a deload after three building weeks) and a day-by-day plan that adds up to it
 - running flags: mileage jumps, long-run share, easy runs done too hard, cadence, aerobic efficiency trend, running streaks
 
+**Per-run detail:** each run's original activity file (FIT) is downloaded
+once, analysed second by second, and saved. That covers:
+- fastest 1K, 3K, 5K, 10K and half-marathon stretches *inside* any run
+- per-km splits, and hill-adjusted pace (Minetti energy-cost model) so hilly runs aren't mistaken for slow ones
+- heart-rate drift (aerobic decoupling) on steady runs, and even, negative or faded pacing
+- interval detection from workout laps, with rep pace, consistency, fade and work/recovery HR
+- time above your easy ceiling, from the full heart-rate trace rather than the average
+
+These results feed the coach:
+- the fitness estimate uses your best segment efforts and even interval sessions
+- runs are classified as easy, long, tempo, intervals or race
+- interval sessions progress (one more rep when the last set was even; repeat it when the reps faded)
+- the long run holds or grows based on last time's drift and pacing
+- the recent-runs table and insights cover endurance, interval execution, long-run pacing and easy-run discipline
+
+The overview shows a **Recent runs** table, and the daily page shows each
+run's pace, HR and elevation charts, splits and best efforts.
+
+Up to 15 new files are processed per visit and 40 by the morning job, so a
+long history fills in over a few visits. Failed downloads are retried after a day.
+
 **Training:** load ratio, consistency, intensity distribution, how hard days
 affect your next-night HRV; weekly volume by sport, load chart, HR-zone time,
 sport mix, and a table of recent activities (click a row to open that day).
@@ -112,7 +133,8 @@ browser ──► server.py or api/*.py ──► personal.connectapi.garmin.com
               │  POST /personalapitoken-service/... (Authorization: ApiKey <key>)  → JWT, ≤24 h
               │  GET  sleep / hrv / stress / steps / body battery / activities … (Bearer JWT)
               ├─ analysis.py  → daily metrics, readiness, insights, running coach
-              └─ storage.py   → daily briefings (private Vercel Blob, or .cache/store locally)
+              ├─ fit.py + run_detail.py → per-run analysis from each activity file
+              └─ storage.py   → daily briefings + per-run results (private Vercel Blob, or .cache/store locally)
 ```
 
 - `garmin_client.py` handles the key → bearer-token exchange (cached, renewed
@@ -123,6 +145,9 @@ browser ──► server.py or api/*.py ──► personal.connectapi.garmin.com
   Vercel functions. Each data set is fetched on its own, so one failing
   endpoint doesn't block the rest. At least 120 days are always fetched, so
   baselines and running history work in the 30-day view too.
+- `fit.py` decodes Garmin FIT activity files (pure Python), and `run_detail.py`
+  turns the second-by-second samples into best efforts, splits, hill-adjusted
+  pace, drift and interval structure.
 - `analysis.py` is all the maths: tolerant field lookup, baselines,
   readiness, insights, and the running coach (Daniels/Gilbert VO₂ equations
   for VDOT, paces and race predictions).
