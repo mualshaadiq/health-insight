@@ -1,0 +1,9 @@
+# Secrets - never commit your Garmin key or tokens
+.env
+.cache/
+*.key
+snapshot*.json
+
+__pycache__/
+*.pyc
+.venv/
