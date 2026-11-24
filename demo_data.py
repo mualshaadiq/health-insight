@@ -61,7 +61,8 @@ def demo_fit(act: dict) -> bytes:
             dist += v
             lap_dist += v
             lap_hr.append(hr)
-            recs.append({"t": start + t, "dist": dist, "speed": v, "hr": round(hr), "cad": round(82 + 6 * factor), "alt": 50 + (30 * (1 - math.cos(dist / 400)) if hilly else 0)})
+            recs.append({"t": start + t, "dist": dist, "speed": v, "hr": round(hr), "cad": round(82 + 6 * factor), "alt": 50 + (30 * (1 - math.cos(dist / 400)) if hilly else 0),
+                         "temp": 31 if (act.get("hour") or 7) >= 12 else 28})
             t += 1
         laps.append({"start": start + lap_start, "end": start + t, "sec": t - lap_start, "dist": lap_dist, "hr": round(sum(lap_hr) / len(lap_hr)), "maxhr": round(max(lap_hr)), "intensity": intensity})
     if kind in ("easy", "long"):  # auto 1 km laps instead of one big lap

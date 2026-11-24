@@ -28,7 +28,7 @@ MSG_SESSION, MSG_LAP, MSG_RECORD = 18, 19, 20
 
 # field number -> (name, scale, offset) for the messages we keep
 FIELDS = {
-    MSG_RECORD: {253: ("timestamp", 1, 0), 2: ("altitude", 5, 500), 3: ("heart_rate", 1, 0), 4: ("cadence", 1, 0),
+    MSG_RECORD: {253: ("timestamp", 1, 0), 2: ("altitude", 5, 500), 3: ("heart_rate", 1, 0), 4: ("cadence", 1, 0), 13: ("temperature", 1, 0),
                  5: ("distance", 100, 0), 6: ("speed", 1000, 0), 7: ("power", 1, 0), 53: ("fractional_cadence", 128, 0),
                  73: ("enhanced_speed", 1000, 0), 78: ("enhanced_altitude", 5, 500)},
     MSG_LAP: {253: ("timestamp", 1, 0), 2: ("start_time", 1, 0), 7: ("total_elapsed_time", 1000, 0),
@@ -196,13 +196,13 @@ def encode(records: list[dict], laps: list[dict], session: dict) -> bytes:
             code, _, invalid = _BASE[btype & 0x1F]
             body.extend(struct.pack("<" + code, invalid if v is None else v))
 
-    rec_f = [(253, 4, 0x86), (5, 4, 0x86), (73, 4, 0x86), (3, 1, 0x02), (4, 1, 0x02), (78, 4, 0x86)]
+    rec_f = [(253, 4, 0x86), (5, 4, 0x86), (73, 4, 0x86), (3, 1, 0x02), (4, 1, 0x02), (78, 4, 0x86), (13, 1, 0x01)]
     lap_f = [(253, 4, 0x86), (2, 4, 0x86), (7, 4, 0x86), (8, 4, 0x86), (9, 4, 0x86), (110, 4, 0x86), (15, 1, 0x02), (16, 1, 0x02), (23, 1, 0x00)]
     ses_f = [(253, 4, 0x86), (2, 4, 0x86), (5, 1, 0x00), (7, 4, 0x86), (9, 4, 0x86)]
     define(0, MSG_RECORD, rec_f)
     for r in records:
         write(0, rec_f, [int(r["t"] - FIT_EPOCH), round(r["dist"] * 100), round(r["speed"] * 1000),
-                         r.get("hr"), r.get("cad"), None if r.get("alt") is None else round((r["alt"] + 500) * 5)])
+                         r.get("hr"), r.get("cad"), None if r.get("alt") is None else round((r["alt"] + 500) * 5), r.get("temp")])
     define(1, MSG_LAP, lap_f)
     for lap in laps:
         write(1, lap_f, [int(lap["end"] - FIT_EPOCH), int(lap["start"] - FIT_EPOCH), round(lap["sec"] * 1000), round(lap["sec"] * 1000),

@@ -267,6 +267,8 @@ def build_activities(sets: dict) -> list[dict]:
             "anTe": a.get("anaerobicTrainingEffect") if _num(a.get("anaerobicTrainingEffect")) else None,
             "zones": zones, "kcal": a.get("calories") if _num(a.get("calories")) else None,
             "elev": a.get("elevationGain") if _num(a.get("elevationGain")) else None,
+            "tempMax": a.get("maxTemperature") if _num(a.get("maxTemperature")) else None,
+            "tempMin": a.get("minTemperature") if _num(a.get("minTemperature")) else None,
             "cadence": next((a[k] for k in ("averageRunningCadenceInStepsPerMinute", "averageRunCadence", "avgRunCadence") if _num(a.get(k))), None),
             "vo2": a.get("vO2MaxValue") if _num(a.get("vO2MaxValue")) else a.get("vo2MaxValue") if _num(a.get("vo2MaxValue")) else None,
         })
@@ -274,8 +276,14 @@ def build_activities(sets: dict) -> list[dict]:
     return out
 
 
-def hr_profile(sets: dict, acts: list[dict]) -> dict:
-    """Max HR and the easy (top of zone 2) ceiling, from Garmin zones when available."""
+def hr_profile(sets: dict, acts: list[dict], rhr: float | None = None) -> dict:
+    """Max HR, zones, and the easy cap.
+
+    The easy cap uses heart-rate reserve (Karvonen): resting + 64.5% of (max − resting),
+    which lands near 150 bpm for a resting HR of ~52 and max of ~204. Without a resting HR
+    it falls back to Garmin's zone 3 floor. EASY_HR_CAP in the environment overrides it.
+    """
+    import os
     floors, max_hr = {}, None
     s = sets.get("hrZones") or {}
     data = s.get("data") if s.get("ok") else None
@@ -293,9 +301,21 @@ def hr_profile(sets: dict, acts: list[dict]) -> dict:
     seen = sorted(a["maxHR"] for a in acts if _num(a.get("maxHR")))
     if not max_hr and seen:
         max_hr = seen[int(len(seen) * 0.95) - 1 if len(seen) > 1 else 0]
-    easy_ceiling = floors.get(3) or (round(max_hr * 0.80) if max_hr else None)
+    method = "Garmin zone 3"
+    easy = floors.get(3) or (round(max_hr * 0.80) if max_hr else None)
+    if max_hr and _num(rhr) and 35 <= rhr <= 90:
+        easy = round(rhr + 0.645 * (max_hr - rhr))
+        method = f"65% of heart-rate reserve (resting {rhr:.0f}, max {max_hr:.0f})"
+    try:
+        override = int(os.environ.get("EASY_HR_CAP", "0"))
+    except ValueError:
+        override = 0
+    if 100 <= override <= 200:
+        easy, method = override, "set manually"
     threshold = floors.get(4) or (round(max_hr * 0.88) if max_hr else None)
-    return {"maxHR": max_hr, "easyCeiling": easy_ceiling, "thresholdHR": threshold, "zoneFloors": floors}
+    return {"maxHR": max_hr, "restingHR": round(rhr) if _num(rhr) else None, "easyCeiling": easy,
+            "walkAbove": easy + 5 if easy else None, "resumeBelow": easy - 10 if easy else None,
+            "easyMethod": method, "thresholdHR": threshold, "zoneFloors": floors}
 
 
 # ----------------------------------------------------------------- core series
@@ -733,6 +753,19 @@ def describe_run(a, d, hrp, fitness=None, kind=None, pbs=None):
                 out["aboveEasyPct"] = round(above * 100)
                 if above > 0.25:
                     notes.append(("warning", f"{above * 100:.0f}% of this easy run was above your easy ceiling ({hrp['easyCeiling']:.0f} bpm)."))
+        cap = hrp.get("easyCeiling")
+        if cap and _num(d.get("hr5")) and d["hr5"] > cap:
+            notes.append(("warning", f"Started hot: {d['hr5']} bpm at minute 5" + (f" and {d['hr10']} at minute 10" if _num(d.get("hr10")) else "") + ". Warm up with a 5 min walk and 5 min very slow jog."))
+        if _num(d.get("fadePct")) and d["fadePct"] <= -5:
+            notes.append(("warning", f"Fast finish: the last stretch was {abs(d['fadePct']):.0f}% quicker than your average pace, which drives HR to its peak."))
+        if _num(d.get("tempC")) and d["tempC"] >= 28:
+            notes.append(("info", f"Hot run: watch logged ~{d['tempC']}°C. Heat typically adds 10–20 bpm."))
+        sa = run_detail.speed_at_hr(d, cap) if cap else None
+        if sa and sa[0] > 0.5:
+            out["capPaceSec"] = round(1000 / sa[0])
+            notes.append(("info", f"At ~{cap} bpm you moved at {pace_str(1000 / sa[0])} ({sa[1] / 60:.0f} min of data, walking included)."))
+        out["tempC"] = d.get("tempC")
+        out["hr5"] = d.get("hr5")
         for k, be in (d.get("best") or {}).items():
             if pbs and k in pbs and pbs[k]["id"] == a["id"] and k != "1k":
                 notes.append(("good", f"Fastest {BEST_LABELS[k]} of the last 90 days: {dur_str(be['sec'] / 60)}."))
@@ -740,7 +773,71 @@ def describe_run(a, d, hrp, fitness=None, kind=None, pbs=None):
     return out
 
 
-def running_report(days, acts, load, hrp, readiness_res, flags, today: date, details=None):
+RATIO_LADDER = [  # (max share of time above the walk trigger, ratio label, jog min, walk min, easy minutes, long minutes)
+    (0.05, "continuous", None, None, "45–50", 80),
+    (0.15, "5:1", 5, 1, "45", 70),
+    (0.30, "3:1", 3, 1, "40–45", 60),
+    (1.01, "2:1", 2, 1, "35–40", 50),
+]
+
+
+def heat_status(runs, det, weather=None):
+    """Recent running temperatures (watch sensor) and, if configured, today's forecast."""
+    temps = []
+    for r in runs[:6]:
+        d = det.get(r["id"])
+        t = (d or {}).get("tempC")
+        if not _num(t):
+            t = r.get("tempMax")
+        if _num(t):
+            temps.append(t)
+    out = {"recentC": round(statistics.median(temps)) if temps else None, "runs": len(temps)}
+    out["hot"] = bool(temps) and statistics.median(temps) >= 27
+    if weather:
+        out["forecast"] = weather
+        if _num(weather.get("maxFeelsC")) and weather["maxFeelsC"] >= 32:
+            out["hot"] = True
+    return out
+
+
+def base_plan(runs, det, kinds, hrp, today, readiness_res, flags, heat):
+    """Heart-rate-capped base building with adaptive run-walk ratios."""
+    cap, walk, resume = hrp.get("easyCeiling"), hrp.get("walkAbove"), hrp.get("resumeBelow")
+    if not cap:
+        return None
+    recent = [det[r["id"]] for r in runs[:3] if det.get(r["id"])]
+    shares = [x for x in (run_detail.time_above(d, walk + 0.5) for d in recent) if x is not None]
+    above = mean(shares) if shares else None
+    first = min(date.fromisoformat(r["date"]) for r in runs)
+    history_days = (today - first).days
+    if above is None:
+        level = RATIO_LADDER[-1]
+    else:
+        level = next(l for l in RATIO_LADDER if above < l[0])
+    active = history_days < 70 or (above is not None and above >= 0.15)
+    quality_ok = (above is not None and above < 0.15 and history_days >= 42 and not flags.get("illness")
+                  and (readiness_res or {}).get("score", 0) >= 70)
+    label, jog, wlk, easy_min, long_min = level[1], level[2], level[3], level[4], level[5]
+    pattern = "run continuously" if jog is None else f"jog {jog} min / walk {wlk} min"
+    rules = [
+        f"Run by heart rate, not pace: stay at or under {cap} bpm.",
+        f"When HR reaches {walk}, walk briskly until it drops below {resume}, then jog again.",
+        "Warm up every time: 5 min brisk walk + 5 min very slow jog.",
+        "Slow jog = short, quick steps (about 165–175 per minute), feet low. Pace doesn't matter.",
+        "No fast finishes" + ("." if quality_ok else ", and no hard sessions until your heart rate stays under the cap."),
+    ]
+    if heat.get("hot"):
+        rules.append("Heat: run before 06:00 or on a treadmill; drink 400–600 ml 1–2 h before; carry electrolytes beyond 45 min.")
+    return {
+        "active": active, "cap": cap, "walkAbove": walk, "resumeBelow": resume, "method": hrp.get("easyMethod"),
+        "ratio": label, "pattern": pattern, "jog": jog, "walk": wlk, "easyMin": easy_min, "longMin": long_min,
+        "aboveCapPct": round(above * 100) if above is not None else None, "basedOnRuns": len(shares),
+        "historyDays": history_days, "qualityAllowed": quality_ok, "rules": rules,
+        "next": None if label == "continuous" else next(l[1] for l in reversed(RATIO_LADDER[:RATIO_LADDER.index(level)])) if RATIO_LADDER.index(level) > 0 else None,
+    }
+
+
+def running_report(days, acts, load, hrp, readiness_res, flags, today: date, details=None, weather=None):
     runs = [a for a in acts if a["family"] == "run" and a["dur"] > 0]
     if not runs:
         return None
@@ -866,6 +963,13 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date, det
     else:
         target, why = (round(base_km), round(min(base_km * 1.1, last_km * 1.1 + 2))), "fine to build, up to ~10% over recent weeks."
     rec["nextWeek"] = {"kmLow": target[0], "kmHigh": max(target), "reason": why, "recentAvgKm": round(base_km, 1)}
+    heat = heat_status(runs, det, weather)
+    rec["heat"] = heat
+    bp = base_plan(runs, det, kinds, hrp, today, readiness_res, flags, heat)
+    rec["base"] = bp
+    if bp and bp["active"] and base_km <= 20 and not tired:
+        rec["nextWeek"] = {"kmLow": max(10, min(14, round(base_km))), "kmHigh": 18, "recentAvgKm": round(base_km, 1),
+                           "reason": "base phase: hold distance steady and let time at an easy heart rate do the work; add at most 10% a week once the cap feels manageable."}
 
     # today's session
     last_run = runs[0]
@@ -938,6 +1042,27 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date, det
         f"last long run {since_long} day(s) ago" if 0 < since_long < 99 else None,
         f"load ratio {acwr:.2f}",
     ] if x]
+    if bp and bp["active"] and sess["type"] not in ("done", "rest"):
+        warm = "5 min brisk walk + 5 min very slow jog, then "
+        body = (f"{bp['pattern']}" if bp["jog"] else "run continuously")
+        capline = f" Keep HR ≤ {bp['cap']}; at {bp['walkAbove']} walk until it's under {bp['resumeBelow']}. Short quick steps, no fast finish."
+        fc = heat.get("forecast") or {}
+        heatline = ((f" Coolest today around {fc['bestHour']} (feels {fc['bestFeelsC']}°C; up to {fc['maxFeelsC']}°C later)." if fc.get("bestHour") else " It's hot: go before 06:00 or use a treadmill.")
+                    + " Drink 400–600 ml 1–2 h before.") if heat.get("hot") else ""
+        weekend = today.weekday() >= 5
+        long_done = any(date.fromisoformat(r["date"]) >= today - timedelta(days=today.weekday()) and (r["dur"] / 60) >= bp["longMin"] * 0.8 for r in runs)
+        ran_yesterday = any(r["date"] == (today - timedelta(days=1)).isoformat() for r in runs)
+        if weekend and not long_done:
+            sess = {"type": "long", "title": f"Long run-walk, {bp['longMin']} min", "detail": warm + body + "." + capline + heatline, "level": "good"}
+        elif ran_yesterday:
+            sess = {"type": "rest", "title": "Rest or easy cross-training", "detail": "Back-to-back days add strain without much benefit in the base phase. Walk, cycle or swim easily if you want to move." + heatline, "level": "good"}
+        else:
+            strides = " Finish with 6 × 20 s relaxed strides (full recovery between)." if today.weekday() in (3, 4) else ""
+            sess = {"type": "easy", "title": f"Easy run-walk, {bp['easyMin']} min", "detail": warm + body + "." + capline + strides + heatline, "level": "good"}
+        sess["why"] = [x for x in [f"base phase ({bp['ratio']})",
+                                   f"{bp['aboveCapPct']}% of recent running above {bp['walkAbove']} bpm" if bp["aboveCapPct"] is not None else None,
+                                   f"readiness {score}" if readiness_res else None,
+                                   f"recent runs at {heat['recentC']}°C" if heat.get("recentC") else None] if x]
     rec["today"] = sess
 
     # weekly plan outline, sized so the sessions add up to the suggested distance
@@ -966,6 +1091,31 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date, det
     rec["planTotalKm"] = long_km + each * others
     rec["plan"] = [{"day": names[i], "type": (layout.get(i) if quality_ok or layout.get(i) != "quality" else "easy") or "rest",
                     "session": labels.get(layout.get(i), "Rest or easy cross-training")} for i in range(7)]
+
+    if bp and bp["active"]:
+        e, l = bp["easyMin"], bp["longMin"]
+        rec["plan"] = [
+            {"day": "Mon", "type": "rest", "session": "Rest"},
+            {"day": "Tue", "type": "easy", "session": f"Easy run-walk {e} min (HR ≤ {bp['cap']})"},
+            {"day": "Wed", "type": "rest", "session": "Rest or easy cross-training"},
+            {"day": "Thu", "type": "easy", "session": f"Easy run-walk {e} min + 6 × 20 s strides"},
+            {"day": "Fri", "type": "rest", "session": "Rest"},
+            {"day": "Sat", "type": "long", "session": f"Long run-walk {l} min (HR ≤ {bp['cap']})"},
+            {"day": "Sun", "type": "rest", "session": "Optional: easy 30 min, or cycling / swimming"},
+        ]
+        if bp["qualityAllowed"]:
+            rec["plan"][3] = {"day": "Thu", "type": "quality", "session": "5 × 2 min faster, 2 min walk between (only if readiness is good)"}
+        rec["planTotalKm"] = None
+
+    # pace at the easy cap, run by run (walking included): the base-building progress test
+    cap = hrp.get("easyCeiling")
+    trend = []
+    for r in reversed(runs):
+        d = det.get(r["id"])
+        sa = run_detail.speed_at_hr(d, cap) if d and cap else None
+        if sa and sa[0] > 0.5:
+            trend.append({"date": r["date"], "paceSec": round(1000 / sa[0]), "minutes": round(sa[1] / 60, 1)})
+    rec["capTrend"] = trend
 
     # running-specific insights
     ins = []
@@ -1051,6 +1201,31 @@ def running_report(days, acts, load, hrp, readiness_res, flags, today: date, det
         ins.append(_ins("warning" if bad else "good", "Long-run pacing",
                         f"{len(longs)} long run(s) in the last 4 weeks; second half {signed(mean(fades), 1, '%')} vs first on average (hill-adjusted).",
                         "running", "Start long runs 10–15 s/km slower than feels natural and fuel early." if bad else None))
+    if heat.get("hot"):
+        ins.append(_ins("warning", "Heat is raising your heart rate",
+                        f"Your watch logged a median {heat['recentC']}°C on your last {heat['runs']} runs. Heat and humidity typically add 10–20 bpm at the same pace and make HR creep up the whole run.",
+                        "running", "Run before 06:00 or on a treadmill, pre-hydrate (400–600 ml 1–2 h before), and expect to walk more on hot days."))
+    if cap:
+        if len(trend) >= 2:
+            a_, b_ = trend[0], trend[-1]
+            diff = a_["paceSec"] - b_["paceSec"]
+            ins.append(_ins("good" if diff > 5 else "info", f"Pace at {cap} bpm",
+                            f"At about {cap} bpm you moved at {pace_str(b_['paceSec'])} on {b_['date']} vs {pace_str(a_['paceSec'])} on {a_['date']} (walking included). This is your base-building progress test; expect it to get faster over 6–12 weeks.",
+                            "running"))
+        else:
+            ins.append(_ins("info", f"Pace at {cap} bpm",
+                            f"Not enough time spent near {cap} bpm yet to measure. Your first capped run-walks will set the starting point.", "running"))
+    hot_starts = [det[r["id"]]["hr5"] for r in runs[:5] if det.get(r["id"]) and _num(det[r["id"]].get("hr5"))]
+    if cap and len(hot_starts) >= 3 and mean(hot_starts) > cap:
+        ins.append(_ins("warning", "Starting too fast",
+                        f"Five minutes into your recent runs your HR averaged {mean(hot_starts):.0f} bpm, already above your {cap} bpm cap.",
+                        "running", "Walk briskly for 5 min, then jog very slowly for 5 min before settling in."))
+    finishes = [det[r["id"]]["fadePct"] for r in runs[:6] if det.get(r["id"]) and _num(det[r["id"]].get("fadePct"))]
+    fast_fin = sum(1 for f in finishes if f <= -5)
+    if fast_fin >= 2:
+        ins.append(_ins("warning", "Fast finishes",
+                        f"{fast_fin} of your last {len(finishes)} runs ended with the final stretch 5%+ faster than average, pushing HR to its peak.",
+                        "running", "Save fast finishes for one planned session a week, after the base phase."))
     rec["insights"] = ins
     rec["summary"] = {"runs28": sum(1 for r in runs if r["date"] >= (today - timedelta(days=28)).isoformat()),
                       "km28": round(sum((r["dist"] or 0) for r in runs if r["date"] >= (today - timedelta(days=28)).isoformat()) / 1000, 1),
@@ -1101,14 +1276,14 @@ def day_report(days, acts, load, target: str):
 
 # ----------------------------------------------------------------- entry point
 
-def analyse(payload: dict, details: dict | None = None) -> dict:
+def analyse(payload: dict, details: dict | None = None, weather: dict | None = None) -> dict:
     meta = payload["meta"]
     sets = payload["sets"]
     start, end = date.fromisoformat(meta["fetchStart"]), date.fromisoformat(meta["end"])
     days = build_days(sets, start, end)
     acts = build_activities(sets)
     load = daily_load(days, acts)
-    hrp = hr_profile(sets, acts)
+    hrp = hr_profile(sets, acts, baseline(days, "rhr", len(days), 28))
     flags = strain_flags(days)
     rd = readiness(days, load, flags)
     order = {"serious": 0, "critical": 0, "warning": 1, "info": 2, "good": 3}
@@ -1125,7 +1300,7 @@ def analyse(payload: dict, details: dict | None = None) -> dict:
             "wellbeing": sort(wellbeing_insights(days, acts, load)),
             "training": sort(training_insights(days, acts, load)),
         },
-        "running": running_report(days, acts, load, hrp, rd, flags, end, details),
+        "running": running_report(days, acts, load, hrp, rd, flags, end, details, weather),
     }
 
 

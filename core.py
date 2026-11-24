@@ -215,6 +215,41 @@ def ensure_details(acts: list[dict], end: date, budget_s: float, max_new: int, o
     return details, pending
 
 
+# ------------------------------------------------------------------ optional weather (opt-in)
+
+_weather_cache: dict = {}
+
+
+def get_weather(tz: str | None) -> dict | None:
+    """Today's hourly 'feels like' temperature from Open-Meteo, only if WEATHER_LAT/WEATHER_LON are set.
+
+    Off by default so no location ever leaves the app unless the owner configures it.
+    """
+    lat, lon = os.environ.get("WEATHER_LAT"), os.environ.get("WEATHER_LON")
+    if not lat or not lon:
+        return None
+    key = (lat, lon, today_in(tz).isoformat())
+    hit = _weather_cache.get(key)
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    import urllib.parse
+    import urllib.request
+    q = urllib.parse.urlencode({"latitude": lat, "longitude": lon, "hourly": "apparent_temperature,temperature_2m,relative_humidity_2m",
+                                "forecast_days": 1, "timezone": tz or "auto"})
+    try:
+        with urllib.request.urlopen(f"https://api.open-meteo.com/v1/forecast?{q}", timeout=8) as r:
+            h = json.loads(r.read())["hourly"]
+        rows = [(t[11:16], f, a, rh) for t, f, a, rh in zip(h["time"], h["apparent_temperature"], h["temperature_2m"], h["relative_humidity_2m"])
+                if f is not None and "04:00" <= t[11:16] <= "21:00"]
+        best = min(rows, key=lambda x: x[1])
+        out = {"maxFeelsC": round(max(x[1] for x in rows)), "bestHour": best[0], "bestFeelsC": round(best[1]),
+               "evening": next((round(x[1]) for x in rows if x[0] == "18:00"), None), "morning": next((round(x[1]) for x in rows if x[0] == "05:00"), None)}
+    except Exception:  # noqa: BLE001 - weather is a nice-to-have
+        out = None
+    _weather_cache[key] = (time.time(), out)
+    return out
+
+
 # ------------------------------------------------------------------ briefings
 
 def _remember_tz(tz: str | None) -> None:
@@ -265,7 +300,7 @@ def handle_data(query: dict, authorization: str | None) -> tuple[int, dict]:
         return (200, s) if s else (404, {"error": "unknown data set"})
     acts = analysis.build_activities(raw["sets"])
     details, pending = ensure_details(acts, date.fromisoformat(raw["meta"]["end"]), budget_s=20, max_new=15)
-    an = analysis.analyse(raw, details)
+    an = analysis.analyse(raw, details, get_weather(tz))
     end = raw["meta"]["end"]
     _remember_tz(tz)
     brief, berr = sync_briefing(an, end, "refresh" if refresh else "visit", force=refresh)
@@ -413,7 +448,7 @@ def handle_cron(authorization: str | None) -> tuple[int, dict]:
         return 502, {"error": str(e)}
     acts = analysis.build_activities(raw["sets"])
     details, pending = ensure_details(acts, date.fromisoformat(raw["meta"]["end"]), budget_s=35, max_new=40)
-    an = analysis.analyse(raw, details)
+    an = analysis.analyse(raw, details, get_weather(tz))
     brief, err = sync_briefing(an, raw["meta"]["end"], "scheduled", force=True)
     if err:
         return 500, {"error": err}

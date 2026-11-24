@@ -42,6 +42,8 @@ variables on the Vercel project:
 | `CRON_SECRET` | required for the morning refresh. Vercel sends it to `/api/cron`, and other callers are rejected. |
 | `BLOB_READ_WRITE_TOKEN` | added automatically when you connect a **private** Vercel Blob store. Daily briefings are stored there. |
 | `APP_TIMEZONE` | optional (e.g. `Asia/Jakarta`). Normally learned from your browser on first visit. |
+| `EASY_HR_CAP` | optional. Fixes the easy heart-rate cap (e.g. `150`) instead of calculating it. |
+| `WEATHER_LAT`, `WEATHER_LON` | optional, opt-in. Enables the Open-Meteo heat forecast for that location. |
 | `DEMO_MODE` | optional. Set to `1` to serve synthetic data instead. |
 
 ### Daily refresh
@@ -97,6 +99,14 @@ once, analysed second by second, and saved. That covers:
 - heart-rate drift (aerobic decoupling) on steady runs, and even, negative or faded pacing
 - interval detection from workout laps, with rep pace, consistency, fade and work/recovery HR
 - time above your easy ceiling, from the full heart-rate trace rather than the average
+
+**Base-building mode** switches on for runners with less than 10 weeks of
+history, or whose recent runs spend 15%+ of moving time above the easy cap:
+- **Easy cap** from heart-rate reserve: resting + 64.5% × (max − resting), about 150 bpm for resting 52 / max 204. Walk at cap + 5, jog again under cap − 10. Override with `EASY_HR_CAP`.
+- **Run-walk ladder** 2:1 → 3:1 → 5:1 → continuous, picked from how much of your last 3 runs was above the walk trigger. Easy and long-run durations grow only as heart-rate control improves.
+- Today's session and the weekly plan become capped run-walk sessions with a warm-up, strides on Thursday and a long run at the weekend. Faster work unlocks only when running stays under the cap.
+- **Pace at your cap** for each run (walking included) is the progress test.
+- **Heat:** the watch's temperature sensor flags hot conditions. Set `WEATHER_LAT` / `WEATHER_LON` to also get today's "feels like" forecast and coolest hour from Open-Meteo; this is off by default, so no location leaves the app unless you set it.
 
 These results feed the coach:
 - the fitness estimate uses your best segment efforts and even interval sessions

@@ -249,3 +249,22 @@ tbody tr:hover { background: var(--wash); }
 .splits summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
 .splits table { margin-top: 6px; }
 @media (max-width: 900px) { .run-charts { grid-template-columns: 1fr; } }
+
+/* ---------- base-building phase ---------- */
+.base-card { margin-bottom: 12px; box-shadow: inset 4px 0 0 var(--s3); }
+.base-head { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.base-head .label { color: var(--ink-2); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+.base-head h3 { margin: 4px 0 0; font-size: 20px; }
+.base-head h3 .unit { font-size: 13px; }
+.base-ratio { display: grid; text-align: right; }
+.base-ratio strong { font-size: 26px; line-height: 1.1; }
+.ladder { list-style: none; display: flex; gap: 6px; padding: 0; margin: 14px 0 10px; flex-wrap: wrap; }
+.ladder li { flex: 1 1 70px; text-align: center; font-size: 12.5px; padding: 5px 8px; border-radius: 6px; background: var(--wash); color: var(--muted); }
+.ladder li.done { color: var(--ink-2); }
+.ladder li.now { background: var(--s3); color: #fff; font-weight: 600; }
+.base-status { margin: 0 0 8px; font-size: 14px; }
+.rules { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 13.5px; color: var(--ink-2); }
+.base-note { font-size: 13px; background: var(--wash); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; }
+.heat-chip { margin-left: auto; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: color-mix(in srgb, var(--serious) 18%, transparent); color: var(--ink); white-space: nowrap; }
+.session-head { flex-wrap: wrap; }
+#f-captrend { margin-bottom: 12px; }

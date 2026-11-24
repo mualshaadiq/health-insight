@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import statistics
 
-VERSION = 3  # bump to re-analyse every saved run
+VERSION = 4  # bump to re-analyse every saved run
 BEST_DISTANCES = {"1k": 1000, "3k": 3000, "5k": 5000, "10k": 10000, "21.1k": 21097.5}
 MOVING_MS = 0.8  # below this a runner is treated as stopped
 
@@ -39,7 +39,7 @@ def _samples(fit: dict):
     if len(recs) < 30:
         return None
     t0 = recs[0]["timestamp"]
-    t, d, v, hr, cad, alt = [], [], [], [], [], []
+    t, d, v, hr, cad, alt, tmp = [], [], [], [], [], [], []
     dist = 0.0
     prev_t = None
     for r in recs:
@@ -62,8 +62,9 @@ def _samples(fit: dict):
         hr.append(r.get("heart_rate"))
         cad.append(c)
         alt.append(r.get("enhanced_altitude", r.get("altitude")))
+        tmp.append(r.get("temperature"))
         prev_t = ts
-    return {"t": t, "d": d, "v": v, "hr": hr, "cad": cad, "alt": alt}
+    return {"t": t, "d": d, "v": v, "hr": hr, "cad": cad, "alt": alt, "tmp": tmp}
 
 
 def _smooth(xs, k=5):
@@ -224,6 +225,19 @@ def analyse_fit(fit: dict, activity_id=None) -> dict | None:
         pace = round(1000 / vs[i]) if vs[i] and vs[i] > MOVING_MS else None
         series.append([round(d[i] / 1000, 3), pace if pace and pace < 1200 else None, hr[i], round(alt_s[i], 1) if alt_s[i] is not None else None])
 
+    # speed at each heart-rate level (5 bpm bins, moving samples after the first 5 min):
+    # lets the coach track "pace at your easy cap" over time, walking included
+    by_bin = {}
+    for i in range(n):
+        if moving[i] and hr[i] and t[i] >= 300:
+            by_bin.setdefault(int(hr[i] // 5 * 5), []).append(v[i])
+    hr_speed = {str(b): [round(statistics.median(vs), 3), len(vs)] for b, vs in sorted(by_bin.items()) if len(vs) >= 20}
+
+    def hr_at(sec):
+        i = next((k for k in range(n) if t[k] >= sec), None)
+        return hr[i] if i is not None and t[-1] >= sec + 60 else None
+
+    temps = [x for x in s["tmp"] if x is not None]
     hr_moving = [hr[i] for i in range(n) if moving[i] and hr[i]]
     cad_moving = [cad[i] for i in range(n) if moving[i] and cad[i]]
     return {
@@ -236,6 +250,8 @@ def analyse_fit(fit: dict, activity_id=None) -> dict | None:
         "best": best, "splits": splits[:60], "paceCv": round(pace_cv, 1) if pace_cv is not None else None,
         "halves": halves, "fadePct": fade, "steady": steady, "decoupling": decoupling,
         "intervals": intervals, "hrHist": {str(k): round(s) for k, s in sorted(hist.items())},
+        "hrSpeed": hr_speed, "hr5": hr_at(300), "hr10": hr_at(600),
+        "tempC": round(statistics.median(temps)) if temps else None,
         "series": series,
     }
 
@@ -280,7 +296,17 @@ def _intervals(laps: list[dict]):
 
 
 def without_series(detail: dict) -> dict:
-    return {k: v for k, v in detail.items() if k not in ("series", "hrHist")}
+    return {k: v for k, v in detail.items() if k not in ("series", "hrHist", "hrSpeed")}
+
+
+def speed_at_hr(detail: dict, bpm: float, band: float = 4) -> tuple[float, int] | None:
+    """Median moving speed (m/s) while heart rate was within ±band of bpm, and seconds of data."""
+    hs = detail.get("hrSpeed") or {}
+    pts = [(int(b) + 2.5, sp, cnt) for b, (sp, cnt) in hs.items() if abs(int(b) + 2.5 - bpm) <= band + 2.5]
+    total = sum(c for _, _, c in pts)
+    if total < 120:
+        return None
+    return sum(sp * c for _, sp, c in pts) / total, total
 
 
 def time_above(detail: dict, bpm: float) -> float | None:

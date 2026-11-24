@@ -64,6 +64,7 @@
 
   <section aria-labelledby="h-running" id="running-sec">
     <div class="sec-head"><h2 id="h-running">Running coach</h2></div>
+    <div class="card base-card" id="run-base" hidden></div>
     <div class="run-grid">
       <div class="card" id="run-fitness"></div>
       <div class="card" id="run-paces"></div>
@@ -71,9 +72,10 @@
     </div>
     <figure class="card table-card" id="run-recent"><figcaption>Recent runs <span class="unit" id="run-coverage"></span></figcaption>
       <div class="table-wrap"><table id="runs-table"><thead><tr>
-        <th>Date</th><th>Type</th><th class="n">Distance</th><th class="n">Pace</th><th class="n">Hill-adj.</th><th class="n">Avg HR</th><th class="n">HR drift</th><th>What stood out</th>
+        <th>Date</th><th>Type</th><th class="n">Distance</th><th class="n">Pace</th><th class="n" id="cap-col">Pace @ cap</th><th class="n">Avg HR</th><th class="n">HR @ 5 min</th><th class="n">HR drift</th><th class="n">Temp</th><th>What stood out</th>
       </tr></thead><tbody></tbody></table></div>
     </figure>
+    <figure class="card" id="f-captrend"><figcaption id="captrend-title">Pace at your easy heart rate <span class="unit">min/km · higher = faster · your base-building progress test</span></figcaption><div class="chart short"><canvas id="c-captrend"></canvas></div></figure>
     <figure class="card"><figcaption>Weekly running distance <span class="unit">km · outlined bar = suggested range for next week</span></figcaption><div class="chart"><canvas id="c-runweekly"></canvas></div></figure>
     <div class="ins-list two" id="ins-running"></div>
   </section>

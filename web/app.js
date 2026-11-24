@@ -107,8 +107,8 @@ const actRow = (a, timeCol) => `<tr>
   <td class="n">${isNum(a.avgHR) ? Math.round(a.avgHR) : "–"}</td>
   <td class="n">${fmtInt(a.load)}</td>
   <td class="n">${isNum(a.te) ? a.te.toFixed(1) : "–"}</td></tr>`;
-const sessionHTML = (s, heading = "Today's run") => !s ? "" : `
-  <div class="session-head"><span class="ico ${s.level}">${ICON[s.level] || "i"}</span><div><div class="label">${heading}</div><h3>${esc(s.title)}</h3></div></div>
+const sessionHTML = (s, heading = "Today's run", heat = null) => !s ? "" : `
+  <div class="session-head"><span class="ico ${s.level}">${ICON[s.level] || "i"}</span><div><div class="label">${heading}</div><h3>${esc(s.title)}</h3></div>${heat?.hot ? `<span class="heat-chip" title="Median watch temperature on recent runs">Hot · ${heat.forecast?.maxFeelsC ? `feels up to ${heat.forecast.maxFeelsC}°C today` : `recent runs ${heat.recentC}°C`}</span>` : ""}</div>
   <p>${esc(s.detail)}</p>${s.why?.length ? `<p class="why">Based on ${s.why.map(esc).join(" · ")}.</p>` : ""}`;
 const timeAgo = (iso) => new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 const SOURCE = { scheduled: "morning schedule", visit: "your visit", refresh: "manual refresh" };
@@ -139,7 +139,7 @@ function renderToday(an, briefing) {
   ].join("");
   const s = an.running?.today;
   $("#session").hidden = !s;
-  $("#session").innerHTML = sessionHTML(s);
+  $("#session").innerHTML = sessionHTML(s, "Today's run", an.running?.heat);
   $("#brief-meta").textContent = briefing ? `Daily briefing saved ${timeAgo(briefing.generatedAt)} (${SOURCE[briefing.source] || briefing.source})${briefing.hasLastNight ? "" : " · waiting for last night's sync"}` : "";
 }
 
@@ -147,6 +147,27 @@ function renderRunning(an) {
   const r = an.running;
   $("#running-sec").hidden = !r;
   if (!r) return;
+  const bp = r.base;
+  $("#run-base").hidden = !(bp && bp.active);
+  if (bp && bp.active) {
+    const ladder = ["2:1", "3:1", "5:1", "continuous"];
+    const step = ladder.indexOf(bp.ratio);
+    $("#run-base").innerHTML = `
+      <div class="base-head">
+        <div><div class="label">Base-building phase</div><h3>Easy cap ${bp.cap} bpm <span class="unit">walk at ${bp.walkAbove}, jog again under ${bp.resumeBelow}</span></h3>
+          <p class="foot" style="margin:2px 0 0">Cap = ${esc(bp.method)}.</p></div>
+        <div class="base-ratio"><span class="unit">Run-walk now</span><strong>${bp.ratio === "continuous" ? "Continuous" : bp.ratio}</strong><span class="unit">${esc(bp.pattern)}</span></div>
+      </div>
+      <ol class="ladder">${ladder.map((x, i) => `<li class="${i < step ? "done" : i === step ? "now" : ""}">${x === "continuous" ? "Continuous" : x}</li>`).join("")}</ol>
+      <p class="base-status">${bp.aboveCapPct != null ? `<span class="ico ${bp.aboveCapPct < 15 ? "good" : bp.aboveCapPct < 30 ? "warning" : "serious"} sm">${bp.aboveCapPct < 15 ? "✓" : "!"}</span>On your last ${bp.basedOnRuns} run(s), <strong>${bp.aboveCapPct}%</strong> of moving time was above ${bp.walkAbove} bpm. ` : ""}${bp.next ? `Get that under ${bp.ratio === "2:1" ? "30" : bp.ratio === "3:1" ? "15" : "5"}% and the plan moves you to <strong>${bp.next}</strong>.` : "You're running continuously under the cap. Keep it there."} Easy runs ${bp.easyMin} min, long run ${bp.longMin} min.${bp.qualityAllowed ? " One faster session a week is now unlocked." : ""}</p>
+      <ul class="rules">${bp.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  }
+  const ct = r.capTrend || [];
+  const capHr = bp?.cap || STATE?.analysis?.hrProfile?.easyCeiling;
+  $("#captrend-title").firstChild.textContent = `Pace at ${capHr || "your easy"} bpm `;
+  $("#cap-col").textContent = capHr ? `Pace @ ${capHr}` : "Pace @ cap";
+  draw("c-captrend", ct.length ? { type: "line", data: { labels: ct.map((x) => shortDate(x.date)), datasets: [line(`Pace at ${capHr} bpm`, ct.map((x) => x.paceSec), css("--s3"), { pointRadius: 4, tension: 0.2 })] },
+    options: baseOpts({ plugins: { tooltip: { callbacks: { label: (c) => ` ${paceFmt(c.parsed.y)}/km (${ct[c.dataIndex].minutes} min near ${capHr} bpm)` } } }, scales: { y: { reverse: true, ticks: { callback: (v) => paceFmt(v) } } } }) } : null);
   const f = r.fitness;
   $("#run-fitness").innerHTML = `<h3 class="card-h">Race predictions</h3>${f ? `
     <div class="kv"><span>Running fitness (VDOT)</span><strong>${f.vdot}</strong></div>
@@ -163,12 +184,14 @@ function renderRunning(an) {
     return `<tr data-date="${x.date}">
       <td>${shortDate(x.date)}</td><td><span class="kind ${x.kind}">${KIND[x.kind] || x.kind}</span></td>
       <td class="n">${x.distKm.toFixed(1)} km</td><td class="n">${paceFmt(x.paceSec)}</td>
-      <td class="n">${x.gapSec && x.paceSec && Math.abs(x.paceSec - x.gapSec) >= 5 ? paceFmt(x.gapSec) : "–"}</td>
+      <td class="n">${paceFmt(x.capPaceSec)}</td>
       <td class="n">${isNum(x.avgHR) ? Math.round(x.avgHR) : "–"}</td>
+      <td class="n">${isNum(x.hr5) ? x.hr5 : "–"}</td>
       <td class="n">${isNum(x.decoupling) ? x.decoupling.toFixed(1) + "%" : "–"}</td>
+      <td class="n">${isNum(x.tempC) ? x.tempC + "°" : "–"}</td>
       <td class="note-cell">${top ? `<span class="ico ${top.level} sm">${ICON[top.level]}</span>${esc(top.text)}` : x.hasDetail ? "" : `<span class="muted">Summary only</span>`}</td></tr>`;
-  }).join("") || `<tr><td colspan="8">No recent runs.</td></tr>`;
-  $("#run-paces").innerHTML = `<h3 class="card-h">Training paces</h3>${r.paces ? `<table class="paces"><tbody>${r.paces.map((p) => `<tr><th>${p.zone}</th><td class="mono">${p.pace}</td><td class="muted">${esc(p.hr || p.use)}</td></tr>`).join("")}</tbody></table>
+  }).join("") || `<tr><td colspan="10">No recent runs.</td></tr>`;
+  $("#run-paces").innerHTML = `<h3 class="card-h">Training paces</h3>${bp && bp.active ? `<p class="base-note">During the base phase, run every easy session <strong>by heart rate (≤ ${bp.cap} bpm)</strong>, not by the paces below. They're for later, once easy running stays under the cap.</p>` : ""}${r.paces ? `<table class="paces"><tbody>${r.paces.map((p) => `<tr><th>${p.zone}</th><td class="mono">${p.pace}</td><td class="muted">${esc(p.hr || p.use)}</td></tr>`).join("")}</tbody></table>
     <p class="foot">Easy runs should feel conversational. Pace targets assume flat ground and mild weather; go by effort on hills and hot days.</p>` : `<p class="muted">Not enough running data yet.</p>`}`;
   const nw = r.nextWeek;
   $("#run-week").innerHTML = `<h3 class="card-h">Next 7 days</h3>
