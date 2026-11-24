@@ -146,7 +146,7 @@ METRICS = {
     "hrv": (["hrv", "sleep"], ["lastNightAvg", "lastNightAverage", "avgOvernightHrv", "hrvValue"]),
     "hrvLow": (["hrv"], ["baseline.balancedLow", "balancedLow"]),
     "hrvHigh": (["hrv"], ["baseline.balancedUpper", "balancedUpper"]),
-    "rhr": (["dailySummaries", "sleep"], ["restingHeartRate", "restingHeartRateValue", "restingHr", "currentDayRestingHeartRate"]),
+    "rhr": (["dailySummaries", "sleep"], ["heartRate.restingValue", "restingHeartRate", "restingHeartRateValue", "restingHr", "currentDayRestingHeartRate"]),
     "steps": (["steps", "dailySummaries"], ["totalSteps", "steps"]),
     "stepGoal": (["steps", "dailySummaries"], ["stepGoal", "dailyStepGoal", "totalStepGoal"]),
     "stress": (["stress", "dailySummaries"], ["overallStressLevel", "averageStressLevel", "avgStressLevel"]),

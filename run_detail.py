@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import statistics
 
-VERSION = 2
+VERSION = 3  # bump to re-analyse every saved run
 BEST_DISTANCES = {"1k": 1000, "3k": 3000, "5k": 5000, "10k": 10000, "21.1k": 21097.5}
 MOVING_MS = 0.8  # below this a runner is treated as stopped
 
