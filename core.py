@@ -452,7 +452,11 @@ def handle_cron(authorization: str | None) -> tuple[int, dict]:
     brief, err = sync_briefing(an, raw["meta"]["end"], "scheduled", force=True)
     if err:
         return 500, {"error": err}
-    return 200, {"ok": True, "date": brief["date"], "tz": tz, "readiness": (brief.get("readiness") or {}).get("score"), "runDetailsPending": pending}
+    garmin = None
+    if _garmin_tokens()[0]:
+        garmin = garmin_sync_run(raw, an, acts)
+    return 200, {"ok": True, "date": brief["date"], "tz": tz, "readiness": (brief.get("readiness") or {}).get("score"), "runDetailsPending": pending,
+                 "garminSync": {k: garmin.get(k) for k in ("ok", "error", "scheduled", "removed")} if garmin else None}
 
 
 def handle_workouts(query: dict, authorization: str | None):
@@ -473,4 +477,69 @@ def handle_workouts(query: dict, authorization: str | None):
         return 404, {"error": "No base-building plan yet (needs a few runs with heart-rate data)."}, "application/json", None
     ratio = "continuous" if not base.get("jog") else f"{base['jog']}-{base['walk']}"
     return 200, workouts.plan_zip(base), "application/zip", f"health-insight-workouts-{ratio}.zip"
+
+
+# ------------------------------------------------------------------ Garmin Connect calendar sync (community library)
+
+TOKENS_KEY = "garmin-connect-tokens.json"
+
+
+def _garmin_tokens() -> tuple[str | None, str]:
+    """Latest saved tokens (refreshed copy in storage wins over the seed in the environment)."""
+    try:
+        saved = storage.get_json(TOKENS_KEY)
+        if saved and saved.get("tokens"):
+            return saved["tokens"], "storage"
+    except Exception:  # noqa: BLE001
+        pass
+    env = os.environ.get("GARMIN_CONNECT_TOKENS", "").strip()
+    return (env or None), "env"
+
+
+def garmin_sync_run(raw: dict, an: dict, acts: list[dict], dry_run: bool = False) -> dict:
+    tokens, source = _garmin_tokens()
+    if not tokens:
+        return {"ok": False, "configured": False,
+                "error": "Garmin Connect isn't connected. Run `python3 garmin_sync.py login` then `token` on your computer and save the output as GARMIN_CONNECT_TOKENS in Vercel."}
+    base = (an.get("running") or {}).get("base")
+    if not base or not base.get("active"):
+        return {"ok": False, "configured": True, "error": "No active base-building plan to send."}
+    import garmin_sync
+    today = date.fromisoformat(raw["meta"]["end"])
+    ran_today = any(a["date"] == today.isoformat() and a["family"] == "run" for a in acts)
+    try:
+        g, read_back = garmin_sync.client_from_tokens(tokens, CACHE / "garmin-connect")
+        report = garmin_sync.sync(g, base, today, ran_today=ran_today, dry_run=dry_run)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "configured": True, "error": f"Garmin Connect sync failed: {type(e).__name__}: {str(e)[:300]}"}
+    persisted = None
+    try:
+        fresh = read_back()
+        if fresh and fresh != tokens:
+            storage.put_json(TOKENS_KEY, {"tokens": fresh, "savedAt": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        persisted = storage.backend()
+    except Exception as e:  # noqa: BLE001
+        persisted = f"failed: {e}"
+    warn = None
+    if ON_VERCEL and storage.backend() != "vercel-blob":
+        warn = "No Blob store: refreshed Garmin tokens can't be kept between restarts, so syncing may stop working until you create one."
+    return {"ok": True, "configured": True, "tokenSource": source, "tokenStorage": persisted, "warning": warn, **report}
+
+
+def handle_garmin(query: dict, authorization: str | None) -> tuple[int, dict]:
+    if (g := _gate(authorization)):
+        return g
+    tz = _q(query, "tz")
+    try:
+        raw = get_raw(MIN_FETCH_DAYS, tz, False)
+    except GarminError as e:
+        return 502, {"error": str(e)}
+    acts = analysis.build_activities(raw["sets"])
+    details, _ = ensure_details(acts, date.fromisoformat(raw["meta"]["end"]), budget_s=15, max_new=10)
+    an = analysis.analyse(raw, details)
+    if _q(query, "status") == "1":
+        tokens, source = _garmin_tokens()
+        return 200, {"configured": bool(tokens), "tokenSource": source if tokens else None}
+    res = garmin_sync_run(raw, an, acts, dry_run=_q(query, "dry", "0") == "1")
+    return (200 if res.get("ok") else 400), res
 

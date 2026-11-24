@@ -270,3 +270,7 @@ tbody tr:hover { background: var(--wash); }
 #f-captrend { margin-bottom: 12px; }
 .watch-dl { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
 .watch-dl .unit { margin: 0; max-width: 640px; line-height: 1.4; }
+.gc-status { flex-basis: 100%; margin: 0; font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--wash); }
+.gc-status.ok { box-shadow: inset 3px 0 0 var(--good); }
+.gc-status.err { box-shadow: inset 3px 0 0 var(--critical); color: var(--ink); }
+.watch-dl + .watch-dl { border-top: 0; padding-top: 0; }

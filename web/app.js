@@ -162,10 +162,16 @@ function renderRunning(an) {
       <p class="base-status">${bp.aboveCapPct != null ? `<span class="ico ${bp.aboveCapPct < 15 ? "good" : bp.aboveCapPct < 30 ? "warning" : "serious"} sm">${bp.aboveCapPct < 15 ? "✓" : "!"}</span>On your last ${bp.basedOnRuns} run(s), <strong>${bp.aboveCapPct}%</strong> of moving time was above ${bp.walkAbove} bpm. ` : ""}${bp.next ? `Get that under ${bp.ratio === "2:1" ? "30" : bp.ratio === "3:1" ? "15" : "5"}% and the plan moves you to <strong>${bp.next}</strong>.` : "You're running continuously under the cap. Keep it there."} Easy runs ${bp.easyMin} min, long run ${bp.longMin} min.${bp.qualityAllowed ? " One faster session a week is now unlocked." : ""}</p>
       <ul class="rules">${bp.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
       <div class="watch-dl">
-        <button class="btn primary" id="dl-workouts">Download workouts for your watch</button>
+        <button class="btn primary" id="gc-sync">Send to Garmin Connect</button>
+        <span class="unit">Puts the next 7 days (Tue · Thu · Sat) on your Garmin calendar; the watch picks them up on its next sync. It also runs every morning once connected.</span>
+        <p class="gc-status" id="gc-status" hidden></p>
+      </div>
+      <div class="watch-dl">
+        <button class="btn" id="dl-workouts">Download .fit files instead</button>
         <span class="unit">Easy, easy + strides and long run at the current step (${bp.ratio === "continuous" ? "continuous" : bp.ratio}), with your ${bp.cap} bpm cap as the heart-rate target. Copy the .fit files to <b>GARMIN/NewFiles</b> on the watch over USB (instructions are in the zip).</span>
       </div>`;
     $("#dl-workouts").addEventListener("click", downloadWorkouts);
+    $("#gc-sync").addEventListener("click", sendToGarmin);
   }
   const ct = r.capTrend || [];
   const capHr = bp?.cap || STATE?.analysis?.hrProfile?.easyCeiling;
@@ -308,6 +314,33 @@ function renderOverview() {
   renderTrainingCharts(days, acts, load);
   renderRecovery(days);
   renderSources(STATE.sources);
+}
+
+async function sendToGarmin() {
+  const btn = $("#gc-sync"), out = $("#gc-status");
+  btn.disabled = true;
+  out.hidden = false;
+  out.className = "gc-status";
+  out.textContent = "Talking to Garmin Connect…";
+  try {
+    const headers = pw.get() ? { Authorization: `Bearer ${pw.get()}` } : {};
+    const res = await fetch(`/api/garmin?tz=${encodeURIComponent(TZ)}`, { headers, cache: "no-store" });
+    const r = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+    if (!res.ok || !r.ok) throw new Error(r.error || `HTTP ${res.status}`);
+    const lines = [];
+    if (r.scheduled?.length) lines.push(`Added: ${r.scheduled.map((x) => x.replace("HI · ", "")).join(" · ")}`);
+    if (r.kept?.length) lines.push(`Already on your calendar: ${r.kept.length}`);
+    if (r.removed?.length) lines.push(`Replaced: ${r.removed.length} from an earlier step`);
+    if (!lines.length) lines.push("Nothing to add for the next 7 days.");
+    if (r.warning) lines.push(`⚠ ${r.warning}`);
+    out.classList.add("ok");
+    out.textContent = lines.join("  ·  ");
+  } catch (e) {
+    out.classList.add("err");
+    out.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function downloadWorkouts() {

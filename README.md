@@ -42,6 +42,7 @@ variables on the Vercel project:
 | `CRON_SECRET` | required for the morning refresh. Vercel sends it to `/api/cron`, and other callers are rejected. |
 | `BLOB_READ_WRITE_TOKEN` | added automatically when you connect a **private** Vercel Blob store. Daily briefings are stored there. |
 | `APP_TIMEZONE` | optional (e.g. `Asia/Jakarta`). Normally learned from your browser on first visit. |
+| `GARMIN_CONNECT_TOKENS` | optional. Token JSON from `python3 garmin_sync.py token` to enable calendar sync (mark it **Sensitive**). |
 | `EASY_HR_CAP` | optional. Fixes the easy heart-rate cap (e.g. `150`) instead of calculating it. |
 | `WEATHER_LAT`, `WEATHER_LON` | optional, opt-in. Enables the Open-Meteo heat forecast for that location. |
 | `DEMO_MODE` | optional. Set to `1` to serve synthetic data instead. |
@@ -116,6 +117,28 @@ heart-rate target. Copy them over USB into `GARMIN/NewFiles` on the watch; it
 imports them into its workout list. Download a fresh set when you move up the
 ladder. The files are built by `workouts.py` and `fit.encode_workout`, and
 check out clean with Garmin's official FIT SDK decoder.
+
+**Garmin Connect calendar sync (unofficial).** `garmin_sync.py` uses the
+community library [`garminconnect`](https://pypi.org/project/garminconnect/)
+to put the next 7 days of the base plan on your Garmin Connect calendar:
+Tue easy, Thu easy + strides, Sat long, each with your heart-rate cap as the
+target. The watch then picks them up on its next sync. This is not an official
+Garmin API: it can break when Garmin changes things, and automated sign-ins may
+be challenged.
+
+```bash
+pip install "garminconnect[workout]==0.3.20"
+python3 garmin_sync.py login          # once, on your computer: email, password, MFA code
+python3 garmin_sync.py push --dry-run # preview, then without --dry-run to send
+python3 garmin_sync.py token          # print tokens to store as GARMIN_CONNECT_TOKENS (Sensitive) in Vercel
+```
+
+Your password is only typed into `login` and is never saved; the library keeps
+refreshable tokens instead. On Vercel, **Send to Garmin Connect** (base-phase
+card) and the morning job use `GARMIN_CONNECT_TOKENS`. Refreshed tokens are
+saved to the private **Blob store**, which is needed so syncing keeps working
+after a token refresh. The sync only touches workouts named `HI · …`. It is
+idempotent, and when you move up the ladder it swaps the old sessions for new ones.
 
 These results feed the coach:
 - the fitness estimate uses your best segment efforts and even interval sessions

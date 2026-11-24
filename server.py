@@ -57,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        routes = {"/api/data": core.handle_data, "/api/day": core.handle_day}
+        routes = {"/api/data": core.handle_data, "/api/day": core.handle_day, "/api/garmin": core.handle_garmin}
         if url.path in routes:
             return self._json(*routes[url.path](parse_qs(url.query), self.headers.get("Authorization")))
         rel = "index.html" if url.path in ("", "/") else url.path.lstrip("/")
