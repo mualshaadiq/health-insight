@@ -3,15 +3,19 @@
   "functions": {
     "api/data.py": {
       "maxDuration": 60,
-      "includeFiles": "{core.py,analysis.py,storage.py,garmin_client.py,demo_data.py,fit.py,run_detail.py,api/_handler.py}"
+      "includeFiles": "{core.py,analysis.py,storage.py,garmin_client.py,demo_data.py,fit.py,run_detail.py,workouts.py,api/_handler.py}"
     },
     "api/day.py": {
       "maxDuration": 60,
-      "includeFiles": "{core.py,analysis.py,storage.py,garmin_client.py,demo_data.py,fit.py,run_detail.py,api/_handler.py}"
+      "includeFiles": "{core.py,analysis.py,storage.py,garmin_client.py,demo_data.py,fit.py,run_detail.py,workouts.py,api/_handler.py}"
     },
     "api/cron.py": {
       "maxDuration": 60,
-      "includeFiles": "{core.py,analysis.py,storage.py,garmin_client.py,demo_data.py,fit.py,run_detail.py,api/_handler.py}"
+      "includeFiles": "{core.py,analysis.py,storage.py,garmin_client.py,demo_data.py,fit.py,run_detail.py,workouts.py,api/_handler.py}"
+    },
+    "api/workouts.py": {
+      "maxDuration": 60,
+      "includeFiles": "{core.py,analysis.py,storage.py,garmin_client.py,demo_data.py,fit.py,run_detail.py,workouts.py,api/_handler.py}"
     }
   },
   "crons": [

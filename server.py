@@ -46,6 +46,17 @@ class Handler(BaseHTTPRequestHandler):
         import core
 
         url = urlsplit(self.path)
+        if url.path == "/api/workouts":
+            status, body, ctype, fname = core.handle_workouts(parse_qs(url.query), self.headers.get("Authorization"))
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            if fname:
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         routes = {"/api/data": core.handle_data, "/api/day": core.handle_day}
         if url.path in routes:
             return self._json(*routes[url.path](parse_qs(url.query), self.headers.get("Authorization")))

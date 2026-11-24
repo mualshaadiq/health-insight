@@ -453,3 +453,24 @@ def handle_cron(authorization: str | None) -> tuple[int, dict]:
     if err:
         return 500, {"error": err}
     return 200, {"ok": True, "date": brief["date"], "tz": tz, "readiness": (brief.get("readiness") or {}).get("score"), "runDetailsPending": pending}
+
+
+def handle_workouts(query: dict, authorization: str | None):
+    """Zip of watch workout files for the current base-plan step. Returns (status, body, content_type, filename)."""
+    if (g := _gate(authorization)):
+        return g[0], g[1], "application/json", None
+    import workouts
+    tz = _q(query, "tz")
+    try:
+        raw = get_raw(MIN_FETCH_DAYS, tz, False)
+    except GarminError as e:
+        return 502, {"error": str(e)}, "application/json", None
+    acts = analysis.build_activities(raw["sets"])
+    details, _ = ensure_details(acts, date.fromisoformat(raw["meta"]["end"]), budget_s=20, max_new=15)
+    an = analysis.analyse(raw, details)
+    base = (an.get("running") or {}).get("base")
+    if not base or not base.get("cap"):
+        return 404, {"error": "No base-building plan yet (needs a few runs with heart-rate data)."}, "application/json", None
+    ratio = "continuous" if not base.get("jog") else f"{base['jog']}-{base['walk']}"
+    return 200, workouts.plan_zip(base), "application/zip", f"health-insight-workouts-{ratio}.zip"
+

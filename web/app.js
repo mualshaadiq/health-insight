@@ -160,7 +160,12 @@ function renderRunning(an) {
       </div>
       <ol class="ladder">${ladder.map((x, i) => `<li class="${i < step ? "done" : i === step ? "now" : ""}">${x === "continuous" ? "Continuous" : x}</li>`).join("")}</ol>
       <p class="base-status">${bp.aboveCapPct != null ? `<span class="ico ${bp.aboveCapPct < 15 ? "good" : bp.aboveCapPct < 30 ? "warning" : "serious"} sm">${bp.aboveCapPct < 15 ? "✓" : "!"}</span>On your last ${bp.basedOnRuns} run(s), <strong>${bp.aboveCapPct}%</strong> of moving time was above ${bp.walkAbove} bpm. ` : ""}${bp.next ? `Get that under ${bp.ratio === "2:1" ? "30" : bp.ratio === "3:1" ? "15" : "5"}% and the plan moves you to <strong>${bp.next}</strong>.` : "You're running continuously under the cap. Keep it there."} Easy runs ${bp.easyMin} min, long run ${bp.longMin} min.${bp.qualityAllowed ? " One faster session a week is now unlocked." : ""}</p>
-      <ul class="rules">${bp.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+      <ul class="rules">${bp.rules.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+      <div class="watch-dl">
+        <button class="btn primary" id="dl-workouts">Download workouts for your watch</button>
+        <span class="unit">Easy, easy + strides and long run at the current step (${bp.ratio === "continuous" ? "continuous" : bp.ratio}), with your ${bp.cap} bpm cap as the heart-rate target. Copy the .fit files to <b>GARMIN/NewFiles</b> on the watch over USB (instructions are in the zip).</span>
+      </div>`;
+    $("#dl-workouts").addEventListener("click", downloadWorkouts);
   }
   const ct = r.capTrend || [];
   const capHr = bp?.cap || STATE?.analysis?.hrProfile?.easyCeiling;
@@ -303,6 +308,25 @@ function renderOverview() {
   renderTrainingCharts(days, acts, load);
   renderRecovery(days);
   renderSources(STATE.sources);
+}
+
+async function downloadWorkouts() {
+  const btn = $("#dl-workouts");
+  btn.disabled = true;
+  try {
+    const headers = pw.get() ? { Authorization: `Bearer ${pw.get()}` } : {};
+    const res = await fetch(`/api/workouts?tz=${encodeURIComponent(TZ)}`, { headers, cache: "no-store" });
+    if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+    const name = (res.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/)?.[1] || "workouts.zip";
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch (e) {
+    alert(`Couldn't create the workouts: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ================================================================ DAILY

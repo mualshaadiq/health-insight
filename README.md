@@ -108,6 +108,15 @@ history, or whose recent runs spend 15%+ of moving time above the easy cap:
 - **Pace at your cap** for each run (walking included) is the progress test.
 - **Heat:** the watch's temperature sensor flags hot conditions. Set `WEATHER_LAT` / `WEATHER_LON` to also get today's "feels like" forecast and coolest hour from Open-Meteo; this is off by default, so no location leaves the app unless you set it.
 
+**Workouts on your watch:** the Personal API is read-only, so the dashboard
+can't push to Garmin Connect. Instead, **Download workouts for your watch** (in
+the base-phase card) gives you a zip of Garmin workout files (`.fit`): easy,
+easy + strides, and long run at your current run-walk step, with the cap as the
+heart-rate target. Copy them over USB into `GARMIN/NewFiles` on the watch; it
+imports them into its workout list. Download a fresh set when you move up the
+ladder. The files are built by `workouts.py` and `fit.encode_workout`, and
+check out clean with Garmin's official FIT SDK decoder.
+
 These results feed the coach:
 - the fitness estimate uses your best segment efforts and even interval sessions
 - runs are classified as easy, long, tempo, intervals or race

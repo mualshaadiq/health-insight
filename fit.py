@@ -213,3 +213,64 @@ def encode(records: list[dict], laps: list[dict], session: dict) -> bytes:
     header += struct.pack("<H", _crc16(header))
     blob = header + bytes(body)
     return blob + struct.pack("<H", _crc16(blob))
+
+
+# ------------------------------------------------------------------ workout files (sideload to /GARMIN/NewFiles)
+
+MSG_FILE_ID, MSG_WORKOUT, MSG_WORKOUT_STEP = 0, 26, 27
+# FIT profile enums
+DUR_TIME, DUR_OPEN, DUR_REPEAT = 0, 5, 6
+TGT_HR, TGT_OPEN = 1, 2
+INT_ACTIVE, INT_REST, INT_WARMUP, INT_COOLDOWN, INT_RECOVERY = 0, 1, 2, 3, 4
+
+
+def encode_workout(name: str, steps: list[dict], created_unix: int) -> bytes:
+    """Write a FIT workout file.
+
+    steps: dicts with kind="time" (sec, intensity, optional hr=(low, high), label)
+    or kind="repeat" (from_step, times). HR targets are custom bpm ranges.
+    """
+    body = bytearray()
+
+    def define(local, gnum, fields):
+        body.append(0x40 | local)
+        body.extend(struct.pack("<BBHB", 0, 0, gnum, len(fields)))
+        for fnum, size, btype in fields:
+            body.extend(bytes((fnum, size, btype)))
+
+    def write(local, fields, values):
+        body.append(local)
+        for (fnum, size, btype), v in zip(fields, values):
+            if btype == 0x07:
+                raw = (v or "").encode("utf-8")[: size - 1]
+                body.extend(raw + b"\0" * (size - len(raw)))
+                continue
+            code, _, invalid = _BASE[btype & 0x1F]
+            body.extend(struct.pack("<" + code, invalid if v is None else v))
+
+    fid = [(0, 1, 0x00), (1, 2, 0x84), (2, 2, 0x84), (3, 4, 0x8C), (4, 4, 0x86)]
+    define(0, MSG_FILE_ID, fid)
+    write(0, fid, [5, 255, 0, (created_unix & 0xFFFFFFF) or 1, created_unix - FIT_EPOCH])  # type=workout, manufacturer=development
+
+    name_len = 32
+    wkt = [(4, 1, 0x00), (6, 2, 0x84), (8, name_len, 0x07)]
+    define(1, MSG_WORKOUT, wkt)
+    write(1, wkt, [1, len(steps), name])  # sport=running
+
+    st = [(254, 2, 0x84), (0, 24, 0x07), (1, 1, 0x00), (2, 4, 0x86), (3, 1, 0x00), (4, 4, 0x86), (5, 4, 0x86), (6, 4, 0x86), (7, 1, 0x00)]
+    define(2, MSG_WORKOUT_STEP, st)
+    for i, s in enumerate(steps):
+        if s["kind"] == "repeat":
+            write(2, st, [i, "", DUR_REPEAT, s["from_step"], None, s["times"], None, None, None])
+            continue
+        hr = s.get("hr")
+        if hr:  # custom HR: values above 100 are bpm + 100
+            vals = [i, s.get("label", ""), DUR_TIME, int(s["sec"] * 1000), TGT_HR, 0, hr[0] + 100, hr[1] + 100, s["intensity"]]
+        else:
+            vals = [i, s.get("label", ""), DUR_TIME, int(s["sec"] * 1000), TGT_OPEN, None, None, None, s["intensity"]]
+        write(2, st, vals)
+
+    header = struct.pack("<BBHI4s", 14, 0x20, 2132, len(body), b".FIT")
+    header += struct.pack("<H", _crc16(header))
+    blob = header + bytes(body)
+    return blob + struct.pack("<H", _crc16(blob))

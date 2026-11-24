@@ -268,3 +268,5 @@ tbody tr:hover { background: var(--wash); }
 .heat-chip { margin-left: auto; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: color-mix(in srgb, var(--serious) 18%, transparent); color: var(--ink); white-space: nowrap; }
 .session-head { flex-wrap: wrap; }
 #f-captrend { margin-bottom: 12px; }
+.watch-dl { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); }
+.watch-dl .unit { margin: 0; max-width: 640px; line-height: 1.4; }
